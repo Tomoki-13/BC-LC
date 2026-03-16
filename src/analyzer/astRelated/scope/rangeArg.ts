@@ -1,7 +1,7 @@
 import * as t from '@babel/types';
 import { extractVariableScopes } from './extractVariableScopes';
 import { collectVariableUsageInScopes } from './collectVariableUsageInScopes';
-import { VariableUsage } from '../../types/VariableUsage';
+import { VariableUsage } from '../../../types/VariableUsage';
 import * as parser from '@babel/parser';
 import { createAstFromContent } from '../base/createAstFromFile';
 

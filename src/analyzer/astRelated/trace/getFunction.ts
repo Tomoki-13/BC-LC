@@ -1,24 +1,50 @@
-// getFunction.ts
 import { promises as fs } from 'fs';
 import traverse from '@babel/traverse';
 import * as t from '@babel/types';
 
 import { createAstFromFile } from '../base/createAstFromFile';
-import { FunctionMetaInfo, FunctionInfo_funcRange } from '../../types/FunctionInfo';
+import { ExtendedFunctionMetaInfo, FunctionInfo_funcRange } from '../../../types/FunctionInfo';
 
-export interface ExtendedFunctionMetaInfo extends FunctionMetaInfo {
-  isPropertyFunction?: boolean;
-  propertyPath?: string;
-  isInstanceMethod?: boolean;
-  prototypeObj?: string;
-  isPotentialPrototype?: boolean;
-  returnExprs?: string[];
-}
+// 拡張メタデータ用ヘルパー: return文の式をソース文字列として抽出
+const getReturnExpressionsFromFunctionNode = (funcNode: any, fileContent: string): string[] => {
+  const exprs: string[] = [];
+  if (!funcNode || !fileContent) return exprs;
 
+  const walk = (node: any, depth = 0) => {
+    if (!node || typeof node !== 'object') return;
+    if (depth > 0 && (node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression' || node.type === 'ArrowFunctionExpression')) {
+      return;
+    }
+    if (node.type === 'ReturnStatement') {
+      if (node.argument && typeof node.argument.start === 'number' && typeof node.argument.end === 'number') {
+        exprs.push(fileContent.slice(node.argument.start, node.argument.end));
+      }
+      return;
+    }
+    for (const key of Object.keys(node)) {
+      const v = node[key];
+      if (Array.isArray(v)) v.forEach((n: any) => walk(n, depth + 1));
+      else if (v && typeof v === 'object' && v.type) walk(v, depth + 1);
+    }
+  };
+
+  if (funcNode.body && funcNode.body.type && funcNode.body.type !== 'BlockStatement') {
+    if (typeof funcNode.body.start === 'number' && typeof funcNode.body.end === 'number') {
+      exprs.push(fileContent.slice(funcNode.body.start, funcNode.body.end));
+    }
+  } else if (funcNode.body) {
+    walk(funcNode.body, 0);
+  }
+
+  return exprs;
+};
+
+// mode = 0: exportされている関数のみを抽出, mode = 1: 全ての関数を抽出
 export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedFunctionMetaInfo[]> => {
   const resultArray: ExtendedFunctionMetaInfo[] = [];
   const explicitlyExportedNames = new Set<string>();
   const exportedFunctions = new Set<string>();
+  const prototypeAliases = new Map<string, string>(); // P.method のようなプロトタイプエイリアスを追跡
 
   try {
     if (!filePath.match(/\.(js|ts|jsx|tsx)$/)) return [];
@@ -29,7 +55,7 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
       console.log(`File ${filePath} is detected as obfuscated. Skipping function extraction.`);
       return [];
     }
-    
+
     const parsed = createAstFromFile(filePath, fileContent);
 
     if (!parsed) {
@@ -47,8 +73,57 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
       return '';
     });
 
+    // 拡張メタデータ用ヘルパー: ネストされたオブジェクト内の関数を再帰的に抽出
+    const extractFunctionReferences = (objNode: any, pathPrefix = '', isExported = false) => {
+      if (!t.isObjectExpression(objNode)) return;
+
+      objNode.properties.forEach((prop: any) => {
+        if (t.isObjectProperty(prop) || t.isObjectMethod(prop)) {
+          let key;
+          if (t.isIdentifier(prop.key)) key = prop.key.name;
+          else if (t.isStringLiteral(prop.key)) key = prop.key.value;
+          else return;
+
+          const fullPath = pathPrefix ? `${pathPrefix}.${key}` : key;
+
+          if (t.isObjectProperty(prop)) {
+            if (t.isIdentifier(prop.value)) { 
+              explicitlyExportedNames.add(prop.value.name); 
+            } else if (t.isObjectExpression(prop.value)) { 
+              extractFunctionReferences(prop.value, fullPath, isExported); 
+            } else if (t.isFunctionExpression(prop.value) || t.isArrowFunctionExpression(prop.value)) {
+              const funcNode = prop.value;
+              const internalName = (funcNode as any).id?.name;
+              resultArray.push({
+                name: internalName || fullPath,
+                isExported,
+                isPropertyFunction: true,
+                propertyPath: fullPath,
+                arg: getParams(funcNode.params),
+                returnExprs: getReturnExpressionsFromFunctionNode(funcNode, fileContent),
+                filePath,
+                start: funcNode.start,
+                end: funcNode.end,
+              });
+            }
+          } else if (t.isObjectMethod(prop)) {
+            resultArray.push({
+              name: fullPath,
+              isExported,
+              isPropertyFunction: true,
+              propertyPath: fullPath,
+              arg: getParams(prop.params),
+              returnExprs: getReturnExpressionsFromFunctionNode(prop, fileContent),
+              filePath,
+              start: prop.start,
+              end: prop.end,
+            });
+          }
+        }
+      });
+    };
+
     traverse(parsed, {
-      // 通常の関数宣言
       FunctionDeclaration(path) {
         if (path.node.id) {
           const name = path.node.id.name;
@@ -58,6 +133,7 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
               name,
               isExported: exportedFunctions.has(serializeFunction(name, params)),
               arg: params,
+              returnExprs: getReturnExpressionsFromFunctionNode(path.node, fileContent),
               filePath,
               start: path.node.start,
               end: path.node.end,
@@ -66,7 +142,6 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
         }
       },
 
-      // ESM: 名前付きエクスポート (export function / export const)
       ExportNamedDeclaration(path) {
         if (path.node.declaration) {
           if (t.isFunctionDeclaration(path.node.declaration) && path.node.declaration.id) {
@@ -74,7 +149,7 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
             const params = getParams(path.node.declaration.params);
             exportedFunctions.add(serializeFunction(name, params));
             if (!resultArray.some((func) => func.name === name)) {
-              resultArray.push({ name, isExported: true, arg: params, filePath, start: path.node.declaration.start, end: path.node.declaration.end });
+              resultArray.push({ name, isExported: true, arg: params, returnExprs: getReturnExpressionsFromFunctionNode(path.node.declaration, fileContent), filePath, start: path.node.declaration.start, end: path.node.declaration.end });
             }
           } else if (t.isVariableDeclaration(path.node.declaration)) {
             for (const declarator of path.node.declaration.declarations) {
@@ -84,13 +159,12 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
                 const params = getParams(declarator.init.params);
                 exportedFunctions.add(serializeFunction(name, params));
                 if (!resultArray.some((func) => func.name === name)) {
-                  resultArray.push({ name, isExported: true, arg: params, filePath, start: declarator.init.start, end: declarator.init.end });
+                  resultArray.push({ name, isExported: true, arg: params, returnExprs: getReturnExpressionsFromFunctionNode(declarator.init, fileContent), filePath, start: declarator.init.start, end: declarator.init.end });
                 }
               }
             }
           }
         }
-        // export { a, b as c } のエイリアスや遅延エクスポートの追跡
         if (path.node.specifiers) {
           path.node.specifiers.forEach((spec) => {
             if (t.isExportSpecifier(spec) && t.isIdentifier(spec.local)) {
@@ -100,21 +174,21 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
         }
       },
 
-      // ESM: デフォルトエクスポート (export default)
       ExportDefaultDeclaration(path) {
         if (t.isFunctionDeclaration(path.node.declaration) && path.node.declaration.id) {
           const name = path.node.declaration.id.name;
           const params = getParams(path.node.declaration.params);
           exportedFunctions.add(serializeFunction(name, params));
           if (!resultArray.some((func) => func.name === name)) {
-            resultArray.push({ name, isExported: true, arg: params, filePath, start: path.node.declaration.start, end: path.node.declaration.end });
+            resultArray.push({ name, isExported: true, arg: params, returnExprs: getReturnExpressionsFromFunctionNode(path.node.declaration, fileContent), filePath, start: path.node.declaration.start, end: path.node.declaration.end });
           }
         } else if (t.isIdentifier(path.node.declaration)) {
           explicitlyExportedNames.add(path.node.declaration.name);
+        } else if (t.isObjectExpression(path.node.declaration)) {
+          extractFunctionReferences(path.node.declaration, '', true);
         }
       },
 
-      // 変数への関数代入 (const a = () => {})
       VariableDeclarator(path) {
         if (t.isIdentifier(path.node.id) && path.node.init && (t.isFunctionExpression(path.node.init) || t.isArrowFunctionExpression(path.node.init))) {
           const name = path.node.id.name;
@@ -124,15 +198,19 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
               name,
               isExported: exportedFunctions.has(serializeFunction(name, params)),
               arg: params,
+              returnExprs: getReturnExpressionsFromFunctionNode(path.node.init, fileContent),
               filePath,
               start: path.node.init.start,
               end: path.node.init.end,
             });
           }
         }
+        // P = {} のような代入をプロトタイプエイリアスの候補として追跡
+        if (t.isIdentifier(path.node.id) && t.isObjectExpression(path.node.init)) {
+          prototypeAliases.set(path.node.id.name, path.node.id.name);
+        }
       },
 
-      // CommonJS / 代入式ベースのエクスポート
       AssignmentExpression(path) {
         const left = path.node.left;
         const right = path.node.right;
@@ -144,18 +222,46 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
             (t.isMemberExpression(left) && t.isIdentifier(left.object, { name: 'module' }) && t.isIdentifier(left.property, { name: 'exports' }));
 
           if (isModuleExports) {
-            const collectExportedNames = (properties: any[]) => {
-              properties.forEach((prop) => {
-                if (t.isObjectProperty(prop)) {
-                  if (t.isIdentifier(prop.value)) {
-                    explicitlyExportedNames.add(prop.value.name);
-                  } else if (t.isObjectExpression(prop.value)) {
-                    collectExportedNames(prop.value.properties);
-                  }
-                }
-              });
-            };
-            collectExportedNames(right.properties);
+            extractFunctionReferences(right, '', true);
+          }
+        }
+
+        // プロトタイプやインスタンスへの関数代入 (P.multiply = ..., Calculator.prototype.add = ...)
+        if (t.isMemberExpression(left) && !left.computed && t.isIdentifier(left.property)) {
+          const object = left.object;
+          const methodName = left.property.name;
+
+          if (t.isFunctionExpression(right) || t.isArrowFunctionExpression(right)) {
+            let isInstance = false;
+            let protoObj = null;
+            let funcName = null;
+
+            if (t.isIdentifier(object) && prototypeAliases.has(object.name)) {
+              isInstance = true;
+              protoObj = object.name;
+              funcName = `${object.name}.${methodName}`;
+            } else if (t.isMemberExpression(object) && t.isIdentifier(object.object) && t.isIdentifier(object.property, { name: 'prototype' })) {
+              isInstance = true;
+              protoObj = `${object.object.name}.prototype`;
+              funcName = `${protoObj}.${methodName}`;
+            }
+
+            if (isInstance && funcName) {
+              if (!resultArray.some(f => f.name === funcName)) {
+                resultArray.push({
+                  name: funcName,
+                  isExported: false,
+                  arg: getParams(right.params),
+                  returnExprs: getReturnExpressionsFromFunctionNode(right, fileContent),
+                  filePath,
+                  start: right.start,
+                  end: right.end,
+                  isInstanceMethod: true,
+                  prototypeObj: protoObj as string,
+                  isPotentialPrototype: prototypeAliases.has(object.type === 'Identifier' ? object.name : ''),
+                });
+              }
+            }
           }
         }
 
@@ -180,6 +286,7 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
               name,
               isExported: true,
               arg: params,
+              returnExprs: getReturnExpressionsFromFunctionNode(right, fileContent),
               filePath,
               start: right.start,
               end: right.end,
@@ -188,7 +295,6 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
         }
       },
 
-      // クラスメソッド
       ClassMethod(path) {
         if (t.isIdentifier(path.node.key)) {
           const name = path.node.key.name;
@@ -200,12 +306,11 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
             isExported = true;
           }
           if (!resultArray.some((func) => func.name === name)) {
-            resultArray.push({ name, isExported, arg: params, filePath, start: path.node.start, end: path.node.end });
+            resultArray.push({ name, isExported, arg: params, returnExprs: getReturnExpressionsFromFunctionNode(path.node, fileContent), filePath, start: path.node.start, end: path.node.end });
           }
         }
       },
 
-      // クラスプロパティへのアロー関数代入
       ClassProperty(path) {
         if (t.isIdentifier(path.node.key) && path.node.value && (t.isArrowFunctionExpression(path.node.value) || t.isFunctionExpression(path.node.value))) {
           const name = path.node.key.name;
@@ -217,13 +322,12 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
             isExported = true;
           }
           if (!resultArray.some((func) => func.name === name)) {
-            resultArray.push({ name, isExported, arg: params, filePath, start: path.node.value.start, end: path.node.value.end });
+            resultArray.push({ name, isExported, arg: params, returnExprs: getReturnExpressionsFromFunctionNode(path.node.value, fileContent), filePath, start: path.node.value.start, end: path.node.value.end });
           }
         }
       }
     });
 
-    // specifierで指定されたエイリアス/エクスポート対象のフラグを更新
     resultArray.forEach((func) => {
       if (explicitlyExportedNames.has(func.name)) {
         func.isExported = true;
@@ -243,6 +347,9 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
   }
 };
 
+/* mode = 0: exportされている関数のみを抽出, mode = 1: 全ての関数を抽出 
+  既存のFunctionInfo_funcRange形式で返すためのラッパー関数
+*/
 export const getBasicFunctionInfo = async (filePath: string, mode = 0): Promise<FunctionInfo_funcRange[]> => {
   const extendedData = await getFunction(filePath, mode);
 

@@ -1,7 +1,7 @@
 import * as path from 'path';
-import { CallModuleAndFuncList } from '../../types/ModuleList';
-import { getImportAndPath } from '../../utils/getImportAndPath';
-import { OutboundFileDependencies } from '../../types/FileDependencies';
+import { CallModuleAndFuncList } from '../../../types/ModuleList';
+import { getImportAndPath } from '../../../utils/getImportAndPath';
+import { OutboundFileDependencies } from '../../../types/FileDependencies';
 
 // 解析対象とするファイルの拡張子
 const SUPPORTED_EXTENSIONS = ['.js', '.ts', '.jsx', '.tsx'];

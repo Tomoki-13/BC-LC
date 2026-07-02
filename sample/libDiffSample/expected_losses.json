@@ -1,0 +1,7 @@
+[
+  { "symbol": "greet",  "tag": "arg-added",          "confidence": "structural", "detail": "(name) → (name, opts)" },
+  { "symbol": "add",    "tag": "arg-removed",        "confidence": "structural", "detail": "(a, b) → (a)" },
+  { "symbol": "legacy", "tag": "function-removed",   "confidence": "structural" },
+  { "symbol": "swap",   "tag": "arg-reordered",      "confidence": "semantic",   "detail": "(a, b) → (b, a)" },
+  { "symbol": "helper", "tag": "deep-import-broken", "confidence": "structural", "detail": "util.js → sub/util.js" }
+]

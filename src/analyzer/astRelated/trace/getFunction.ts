@@ -1,6 +1,9 @@
 import { promises as fs } from 'fs';
-import traverse from '@babel/traverse';
+import traverseImport from '@babel/traverse';
 import * as t from '@babel/types';
+
+// ESM 経由だと default が { default: fn } になりうるため callable を取り出す
+const traverse = ((traverseImport as any).default ?? traverseImport) as typeof traverseImport;
 
 import { createAstFromFile } from '../base/createAstFromFile';
 import { ExtendedFunctionMetaInfo, FunctionInfo_funcRange } from '../../../types/FunctionInfo';
@@ -262,6 +265,21 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
                 });
               }
             }
+          }
+        }
+
+        // module.exports = <識別子> / exports.x = <識別子>（参照によるエクスポート）を捕捉
+        //   例: function v4(){}; module.exports = v4;  /  exports.foo = foo;
+        if (t.isIdentifier(right)) {
+          const isModuleExportsDefault =
+            t.isIdentifier(left, { name: 'exports' }) ||
+            (t.isMemberExpression(left) && t.isIdentifier(left.object, { name: 'module' }) && t.isIdentifier(left.property, { name: 'exports' }));
+          const isExportsProperty =
+            t.isMemberExpression(left) && !left.computed && t.isIdentifier(left.property) &&
+            (t.isIdentifier(left.object, { name: 'exports' }) ||
+              (t.isMemberExpression(left.object) && t.isIdentifier(left.object.object, { name: 'module' }) && t.isIdentifier(left.object.property, { name: 'exports' })));
+          if (isModuleExportsDefault || isExportsProperty) {
+            explicitlyExportedNames.add(right.name);
           }
         }
 

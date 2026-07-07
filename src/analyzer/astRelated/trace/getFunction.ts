@@ -6,7 +6,46 @@ import * as t from '@babel/types';
 const traverse = ((traverseImport as any).default ?? traverseImport) as typeof traverseImport;
 
 import { createAstFromFile } from '../base/createAstFromFile';
-import { ExtendedFunctionMetaInfo, FunctionInfo_funcRange } from '../../../types/FunctionInfo';
+import { ExtendedFunctionMetaInfo, FunctionInfo_funcRange, ExportStyleTag, SymbolKindTag } from '../../../types/FunctionInfo';
+
+// options 引数とみなす識別子名（body 内の opts.key 読み取りを拾う対象）
+const OPTION_PARAM_RE = /^(opts?|options?|config|conf|settings?|params?|args)$/i;
+
+// ObjectPattern の宣言キーを集める（{a, b = 1, c: renamed, ...rest} → a,b,c）
+const collectPatternKeys = (pattern: any, keys: Set<string>): void => {
+  for (const p of pattern.properties) {
+    if (t.isObjectProperty(p) && !p.computed) {
+      if (t.isIdentifier(p.key)) keys.add(p.key.name);
+      else if (t.isStringLiteral(p.key)) keys.add(p.key.value);
+    }
+  }
+};
+
+// 関数ノードが消費する options キー（(A)分割代入 object 引数 / (B)opts 風引数への body 読み取り）
+const functionOptionKeys = (node: any, nodePath: any): string[] => {
+  const keys = new Set<string>();
+  const optionParamNames: string[] = [];
+  for (const param of node.params as any[]) {
+    const target = t.isAssignmentPattern(param) ? param.left : param; // 既定値付き引数を剥がす
+    if (t.isObjectPattern(target)) collectPatternKeys(target, keys);
+    else if (t.isIdentifier(target) && OPTION_PARAM_RE.test(target.name)) optionParamNames.push(target.name);
+  }
+  if (optionParamNames.length > 0) {
+    nodePath.traverse({
+      MemberExpression(mp: any) {
+        const mn = mp.node;
+        if (!mn.computed && t.isIdentifier(mn.object) && optionParamNames.includes(mn.object.name)
+          && t.isIdentifier(mn.property)) keys.add(mn.property.name);
+      },
+      VariableDeclarator(vp: any) {
+        const vn = vp.node;
+        if (t.isObjectPattern(vn.id) && t.isIdentifier(vn.init) && optionParamNames.includes(vn.init.name))
+          collectPatternKeys(vn.id, keys);
+      },
+    });
+  }
+  return [...keys].sort();
+};
 
 // 拡張メタデータ用ヘルパー: return文の式をソース文字列として抽出
 const getReturnExpressionsFromFunctionNode = (funcNode: any, fileContent: string): string[] => {
@@ -48,9 +87,13 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
   const explicitlyExportedNames = new Set<string>();
   const exportedFunctions = new Set<string>();
   const prototypeAliases = new Map<string, string>(); // P.method のようなプロトタイプエイリアスを追跡
+  // module.exports = <識別子> で公開される「デフォルトエクスポートの実体」識別子
+  const exportRootIds = new Set<string>();
+  // <exportRoot>.prop = 関数/識別子 （uuid.v4 = v4 のようなプロパティ公開）を後段で解決するため収集
+  const propAssignments: { objName: string; prop: string; funcNode: any | null; valueName: string | null }[] = [];
 
   try {
-    if (!filePath.match(/\.(js|ts|jsx|tsx)$/)) return [];
+    if (!filePath.match(/\.(js|jsx|ts|tsx|mjs|cjs|mts|cts)$/)) return [];
 
     const fileContent: string = await fs.readFile(filePath, 'utf8');
 
@@ -229,6 +272,29 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
           }
         }
 
+        // module.exports = function(){...} / = (...) => {...}（無名の直接デフォルト export）
+        //   単一関数モジュールの最頻出形。名前が無いので関数式の id か 'default' を採用
+        if (t.isFunctionExpression(right) || t.isArrowFunctionExpression(right)) {
+          const isModuleExportsDefault =
+            (t.isIdentifier(left) && left.name === 'exports') ||
+            (t.isMemberExpression(left) && !left.computed
+              && t.isIdentifier(left.object, { name: 'module' }) && t.isIdentifier(left.property, { name: 'exports' }));
+          if (isModuleExportsDefault) {
+            const fnName = (t.isFunctionExpression(right) && right.id?.name) ? right.id.name : 'default';
+            if (!resultArray.some(f => f.name === fnName && f.start === right.start)) {
+              resultArray.push({
+                name: fnName,
+                isExported: true,
+                arg: getParams(right.params),
+                returnExprs: getReturnExpressionsFromFunctionNode(right, fileContent),
+                filePath,
+                start: right.start,
+                end: right.end,
+              });
+            }
+          }
+        }
+
         // プロトタイプやインスタンスへの関数代入 (P.multiply = ..., Calculator.prototype.add = ...)
         if (t.isMemberExpression(left) && !left.computed && t.isIdentifier(left.property)) {
           const object = left.object;
@@ -280,6 +346,23 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
               (t.isMemberExpression(left.object) && t.isIdentifier(left.object.object, { name: 'module' }) && t.isIdentifier(left.object.property, { name: 'exports' })));
           if (isModuleExportsDefault || isExportsProperty) {
             explicitlyExportedNames.add(right.name);
+          }
+          if (isModuleExportsDefault) {
+            exportRootIds.add(right.name); // module.exports = uuid → uuid が公開の実体
+          }
+        }
+
+        // <識別子>.prop = 関数/識別子（uuid.v4 = v4 のようなプロパティ公開）を収集（後段で解決）
+        //   ※ exports / module.exports 系は既存処理が拾うので除外
+        if (t.isMemberExpression(left) && !left.computed && t.isIdentifier(left.object)
+            && left.object.name !== 'exports' && left.object.name !== 'module'
+            && t.isIdentifier(left.property)) {
+          const objName = left.object.name;
+          const prop = left.property.name;
+          if (t.isFunctionExpression(right) || t.isArrowFunctionExpression(right)) {
+            propAssignments.push({ objName, prop, funcNode: right, valueName: null });
+          } else if (t.isIdentifier(right)) {
+            propAssignments.push({ objName, prop, funcNode: null, valueName: right.name });
           }
         }
 
@@ -346,10 +429,95 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
       }
     });
 
+    // プロパティ公開の解決: <exportRoot>.prop = 関数/識別子（例 uuid.v4 = v4）
+    for (const pa of propAssignments) {
+      if (!exportRootIds.has(pa.objName)) continue; // 公開の実体(module.exports=X の X)への代入のみ
+      const accessPath = `${pa.objName}.${pa.prop}`;
+      if (pa.funcNode) {
+        // インライン関数を公開: 新規 export シンボルとして追加
+        if (!resultArray.some(f => f.propertyPath === accessPath || (f.name === pa.prop && !f.isPropertyFunction))) {
+          resultArray.push({
+            name: pa.prop,
+            isExported: true,
+            isPropertyFunction: true,
+            propertyPath: accessPath,
+            arg: getParams(pa.funcNode.params),
+            returnExprs: getReturnExpressionsFromFunctionNode(pa.funcNode, fileContent),
+            filePath,
+            start: pa.funcNode.start,
+            end: pa.funcNode.end,
+          });
+        }
+      } else if (pa.valueName) {
+        // 参照公開(uuid.v4 = v4): 実体は多くが別ファイル。export とみなし、同ファイルに実体があれば accessPath 付与
+        explicitlyExportedNames.add(pa.valueName);
+        const sym = resultArray.find(f => f.name === pa.valueName);
+        if (sym) { sym.isExported = true; sym.isPropertyFunction = true; sym.propertyPath = accessPath; }
+      }
+    }
+
     resultArray.forEach((func) => {
       if (explicitlyExportedNames.has(func.name)) {
         func.isExported = true;
       }
+    });
+
+    // メタ情報（async / optionKeys / exportStyle / kind）を同じ AST の2巡目で収集し付与
+    //   関数系メタは start（ノード位置）で、exportStyle/kind は name で resultArray に対応づける
+    const asyncOptByStart = new Map<number, { isAsync: boolean; optionKeys: string[] }>();
+    const styleByName = new Map<string, ExportStyleTag>();
+    const kindByName = new Map<string, SymbolKindTag>();
+    traverse(parsed, {
+      enter(p) {
+        const n: any = p.node;
+        if ((t.isFunctionDeclaration(n) || t.isFunctionExpression(n) || t.isArrowFunctionExpression(n) || t.isObjectMethod(n)) && n.start != null) {
+          asyncOptByStart.set(n.start, { isAsync: !!n.async, optionKeys: functionOptionKeys(n, p) });
+        }
+      },
+      ExportNamedDeclaration(p) {
+        const n = p.node;
+        const style: ExportStyleTag = n.source ? 'esm-reexport' : 'esm-named';
+        if (n.declaration) {
+          if (t.isFunctionDeclaration(n.declaration) && n.declaration.id) styleByName.set(n.declaration.id.name, 'esm-named');
+          else if (t.isClassDeclaration(n.declaration) && n.declaration.id) { styleByName.set(n.declaration.id.name, 'esm-named'); kindByName.set(n.declaration.id.name, 'class'); }
+          else if (t.isVariableDeclaration(n.declaration)) {
+            for (const d of n.declaration.declarations) if (t.isIdentifier(d.id)) styleByName.set(d.id.name, 'esm-named');
+          }
+        }
+        for (const s of n.specifiers) if (t.isExportSpecifier(s) && t.isIdentifier(s.exported)) styleByName.set(s.exported.name, style);
+      },
+      ExportDefaultDeclaration(p) {
+        const d: any = p.node.declaration;
+        const name = (t.isFunctionDeclaration(d) || t.isClassDeclaration(d)) && d.id ? d.id.name : 'default';
+        styleByName.set(name, 'esm-default');
+        if (t.isClassDeclaration(d)) kindByName.set(name, 'class');
+      },
+      AssignmentExpression(p) {
+        const { left, right } = p.node as any;
+        if (!t.isMemberExpression(left) || left.computed) return;
+        const isModuleExports = t.isIdentifier(left.object, { name: 'module' }) && t.isIdentifier(left.property, { name: 'exports' });
+        const isExportsProp = t.isIdentifier(left.object, { name: 'exports' }) && t.isIdentifier(left.property);
+        const isModuleExportsProp = t.isMemberExpression(left.object) && !left.object.computed
+          && t.isIdentifier(left.object.object, { name: 'module' }) && t.isIdentifier(left.object.property, { name: 'exports' }) && t.isIdentifier(left.property);
+        if (isModuleExports) {
+          if (t.isObjectExpression(right)) {
+            for (const pr of right.properties) if (t.isObjectProperty(pr) && !pr.computed && t.isIdentifier(pr.key)) styleByName.set(pr.key.name, 'cjs-property');
+          } else {
+            const name = t.isIdentifier(right) ? right.name : 'default';
+            styleByName.set(name, 'cjs-module-default');
+            if (t.isClassExpression(right)) kindByName.set(name, 'class');
+          }
+        } else if ((isExportsProp || isModuleExportsProp) && t.isIdentifier(left.property)) {
+          styleByName.set(left.property.name, 'cjs-property');
+        }
+      },
+    });
+    resultArray.forEach((func) => {
+      const ao = func.start != null ? asyncOptByStart.get(func.start) : undefined;
+      func.isAsync = ao?.isAsync ?? false;
+      func.optionKeys = ao?.optionKeys ?? [];
+      func.exportStyle = styleByName.get(func.name) ?? 'unknown';
+      func.kind = kindByName.get(func.name) ?? 'function';
     });
 
   } catch (error) {

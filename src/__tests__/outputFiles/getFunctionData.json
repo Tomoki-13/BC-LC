@@ -359,10 +359,20 @@
     {
       "name": "calculateTotal",
       "isExported": false,
-      "arg": ["price", "tax"],
-      "returnExprs": ["price * tax"],
+      "arg": [
+        "price",
+        "tax"
+      ],
+      "returnExprs": [
+        "price * tax"
+      ],
       "filePath": "./src/__tests__/inputFiles/functionSample/getFunc_extended.js",
-      "start": 0, "end": 0
+      "start": 0,
+      "end": 0,
+      "isAsync": false,
+      "optionKeys": [],
+      "exportStyle": "unknown",
+      "kind": "function"
     },
     {
       "name": "Calculator",
@@ -370,38 +380,74 @@
       "arg": [],
       "returnExprs": [],
       "filePath": "./src/__tests__/inputFiles/functionSample/getFunc_extended.js",
-      "start": 0, "end": 0
+      "start": 0,
+      "end": 0,
+      "isAsync": false,
+      "optionKeys": [],
+      "exportStyle": "unknown",
+      "kind": "function"
     },
     {
       "name": "Calculator.prototype.add",
       "isExported": false,
-      "arg": ["a", "b"],
-      "returnExprs": ["a + b"],
+      "arg": [
+        "a",
+        "b"
+      ],
+      "returnExprs": [
+        "a + b"
+      ],
+      "filePath": "./src/__tests__/inputFiles/functionSample/getFunc_extended.js",
+      "start": 0,
+      "end": 0,
       "isInstanceMethod": true,
       "prototypeObj": "Calculator.prototype",
-      "filePath": "./src/__tests__/inputFiles/functionSample/getFunc_extended.js",
-      "start": 0, "end": 0
+      "isPotentialPrototype": false,
+      "isAsync": false,
+      "optionKeys": [],
+      "exportStyle": "unknown",
+      "kind": "function"
     },
     {
       "name": "P.multiply",
       "isExported": false,
-      "arg": ["a", "b"],
-      "returnExprs": ["a * b"],
+      "arg": [
+        "a",
+        "b"
+      ],
+      "returnExprs": [
+        "a * b"
+      ],
+      "filePath": "./src/__tests__/inputFiles/functionSample/getFunc_extended.js",
+      "start": 0,
+      "end": 0,
       "isInstanceMethod": true,
       "prototypeObj": "P",
       "isPotentialPrototype": true,
-      "filePath": "./src/__tests__/inputFiles/functionSample/getFunc_extended.js",
-      "start": 0, "end": 0
+      "isAsync": false,
+      "optionKeys": [],
+      "exportStyle": "unknown",
+      "kind": "function"
     },
     {
       "name": "mathUtils.divide",
       "isExported": true,
-      "arg": ["a", "b"],
-      "returnExprs": ["a / b"],
       "isPropertyFunction": true,
       "propertyPath": "mathUtils.divide",
+      "arg": [
+        "a",
+        "b"
+      ],
+      "returnExprs": [
+        "a / b"
+      ],
       "filePath": "./src/__tests__/inputFiles/functionSample/getFunc_extended.js",
-      "start": 0, "end": 0
+      "start": 0,
+      "end": 0,
+      "isAsync": false,
+      "optionKeys": [],
+      "exportStyle": "unknown",
+      "kind": "function"
     }
   ]
 }

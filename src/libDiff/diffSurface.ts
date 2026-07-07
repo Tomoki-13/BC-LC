@@ -7,8 +7,10 @@ function labelOf(tag: ChangeTag): string {
     case 'module-removed':       return 'モジュールの削除';
     case 'arg-added':            return '引数の増加（必須化なら呼び出し側で不足）';
     case 'arg-removed':          return '引数の削除（余剰引数になる）';
-    case 'arg-reordered':        return '引数の並び/名称変更';
+    case 'arg-reordered':        return '引数の並び替え（位置がずれる＝破壊的）';
     case 'arg-type-changed':     return '引数の型変更';
+    case 'option-removed':       return 'options キーの削除（クライアントの指定が無視される）';
+    case 'option-added':         return 'options キーの追加（加算的・参考）';
     case 'return-changed':       return '返り値・仕様の変更（同一シグネチャ）';
     case 'spec-changed':         return '仕様変更';
     case 'new-required':         return 'new 必須化/禁止化';
@@ -34,14 +36,24 @@ function indexByName(surface: ApiSurface): Map<string, ApiSymbol[]> {
   return m;
 }
 
-/** 引数配列の差から arg 系タグを判定（型なし＝arity と名称ベース） */
+/** 引数配列の差から arg 系タグを判定（型なし＝arity と名称ベース）
+ *  - 個数変化 → arg-added / arg-removed
+ *  - 同数で「同じ名前集合の並び替え」→ arg-reordered（位置がずれるので破壊的）
+ *  - 同数で「名前集合が違う」＝単なるリネーム → null（位置引数呼び出しは壊れないので除外＝ノイズ低減） */
 function diffParams(pre: string[], post: string[]): ChangeTag | null {
   if (post.length > pre.length) return 'arg-added';
   if (post.length < pre.length) return 'arg-removed';
-  if (pre.some((p, i) => p !== post[i])) return 'arg-reordered';
-  return null;
+  if (pre.every((p, i) => p === post[i])) return null;
+  const sameSet = JSON.stringify([...pre].sort()) === JSON.stringify([...post].sort());
+  return sameSet ? 'arg-reordered' : null;
 }
 
+/** 返り値式の比較用に空白を正規化（整形だけの差を無視する） */
+function normReturns(arr: string[] | undefined): string {
+  return (arr ?? []).join(' || ').replace(/\s+/g, ' ').trim();
+}
+
+/** pre/post の surface を突き合わせ、後方互換性の損失候補を返す */
 function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCandidate[] {
   const out: LossCandidate[] = [];
   const preByName = indexByName(pre);
@@ -84,15 +96,15 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
     for (const a of preSyms) {
       const b = postSyms.find(s => s.filePath === a.filePath) ?? postSyms[0];
 
-      // 3a) 引数（増減/並び）。同一なら 3b 返り値（仕様変更）を semantic で拾う
+      // 3a) 引数（増減/並び）。arg 変化が無ければ 3b 返り値（仕様変更）を semantic で拾う
       const paramTag = diffParams(a.params ?? [], b.params ?? []);
       if (paramTag) {
-        once(`${a.filePath}:${paramTag}`, () => out.push(make(b, paramTag,
-          paramTag === 'arg-reordered' ? 'semantic' : 'structural',
+        once(`${a.filePath}:${paramTag}`, () => out.push(make(b, paramTag, 'structural',
           `(${(a.params ?? []).join(', ')}) → (${(b.params ?? []).join(', ')})`)));
       } else {
-        const ra = (a.returnExprs ?? []).join(' || ');
-        const rb = (b.returnExprs ?? []).join(' || ');
+        // 空白正規化して比較（整形だけの差＝関数↔アロー等の一部ノイズを無視）
+        const ra = normReturns(a.returnExprs);
+        const rb = normReturns(b.returnExprs);
         if (ra !== rb && (ra || rb)) {
           once(`${a.filePath}:return-changed`, () => out.push(make(b, 'return-changed', 'semantic',
             `return: [${ra}] → [${rb}]`)));
@@ -105,12 +117,22 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
           `${a.isAsync ? 'async' : 'sync'} → ${b.isAsync ? 'async' : 'sync'}`)));
       }
 
-      // 3d) 呼び出し形（プロパティ公開パス）の変化。例 uuid.v4 で呼べるか等
-      //     ※ identifier 代入によるプロパティ公開（uuid.v4 = v4）は getFunction 未捕捉のため
-      //       現状は object-export 形式が中心。完全対応は export 抽出拡張後（TODO）
+      // 3d) 呼び出し形（プロパティ公開パス accessPath）の変化。例: uuid.v4 → 直接
       if ((a.accessPath ?? '') !== (b.accessPath ?? '')) {
         once(`${a.filePath}:export-style-changed`, () => out.push(make(b, 'export-style-changed', 'semantic',
           `${a.accessPath || '(直接)'} → ${b.accessPath || '(直接)'}`)));
+      }
+
+      // 3e) options オブジェクトの受理キー変化（分割代入 or opts.key 読み取りベース）
+      const preKeys = new Set(a.optionKeys ?? []);
+      const postKeys = new Set(b.optionKeys ?? []);
+      if (preKeys.size > 0) {
+        // 追加(option-added)は加算的で非破壊のため損失候補にしない。削除のみ BC 損失として出す
+        const removed = [...preKeys].filter(k => !postKeys.has(k));
+        if (removed.length > 0) {
+          once(`${a.filePath}:option-removed`, () => out.push(make(b, 'option-removed', 'semantic',
+            `削除キー: ${removed.join(', ')}`)));
+        }
       }
     }
   }

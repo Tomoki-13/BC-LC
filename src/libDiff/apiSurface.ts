@@ -38,7 +38,5 @@ async function buildApiSurface(treeDir: string, version: string, tag: string): P
 }
 
 export default {
-  listSourceFiles,
-  extractExports,
   buildApiSurface,
 };

@@ -73,57 +73,70 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
     detail,
   });
 
+  // pre の全 export 名 × 全定義(ファイル)を走査
   for (const [name, preSyms] of preByName) {
-    const postSyms = postByName.get(name);
-
-    // 1) 削除（post に同名 export 無し）
-    if (!postSyms) {
-      out.push(make(preSyms[0], 'function-removed', 'structural'));
-      continue;
-    }
-
-    // 2) ファイル移動（pre/post で出現ファイルが総入れ替え）→ deep-import 影響
+    const postSyms = postByName.get(name) ?? [];
     const preFiles = new Set(preSyms.map(s => s.filePath));
     const postFiles = new Set(postSyms.map(s => s.filePath));
-    if (![...preFiles].some(f => postFiles.has(f))) {
-      out.push(make(postSyms[0], 'deep-import-broken', 'structural',
-        `${preSyms[0].filePath} → ${postSyms[0].filePath}`));
-    }
+    // 名前は残るが pre/post でファイルが全く重ならない＝定義の移動（deep-import 破壊）
+    const relocated = postSyms.length > 0 && ![...preFiles].some(f => postFiles.has(f));
 
-    // 3) 同一ファイルの post を優先して対応付け、各種シグネチャ変化を検出
     const seen = new Set<string>();
     const once = (key: string, fn: () => void) => { if (!seen.has(key)) { seen.add(key); fn(); } };
-    for (const a of preSyms) {
-      const b = postSyms.find(s => s.filePath === a.filePath) ?? postSyms[0];
 
-      // 3a) 引数（増減/並び）。arg 変化が無ければ 3b 返り値（仕様変更）を semantic で拾う
+    // 定義=ファイル単位で対応付け（同名が複数ファイルにあっても全て評価）
+    for (const a of preSyms) {
+      let b = postSyms.find(s => s.filePath === a.filePath);
+
+      // 1) 対応する post 定義が無い → 削除 / 移動 を定義(ファイル)単位で判定
+      if (!b) {
+        // 1a) 名前ごと消滅（複数ファイルにあれば各ファイル分を記録）
+        if (postSyms.length === 0) {
+          once(`${a.filePath}:function-removed`, () => out.push(make(a, 'function-removed', 'structural')));
+          continue;
+        }
+        // 1b) 全ファイル移動 → deep-import 破壊。移動先を対応先にして署名比較も継続
+        if (relocated) {
+          once(`${a.filePath}:deep-import-broken`, () => out.push(make(a, 'deep-import-broken', 'structural',
+            `${a.filePath} → ${postSyms[0].filePath}`)));
+          b = postSyms[0];
+        } else {
+          // 1c) 名前は他ファイルに残るが この定義(ファイル)は消えた（このパスの deep import が壊れる）
+          once(`${a.filePath}:function-removed`, () => out.push(make(a, 'function-removed', 'structural',
+            `${a.filePath} から削除（他ファイルには存在）`)));
+          continue;
+        }
+      }
+
+      // 2) 署名変化を検出（arg と return は排他にしない＝取りこぼし防止）
+      // 2a) 引数（増減/並び）
       const paramTag = diffParams(a.params ?? [], b.params ?? []);
       if (paramTag) {
         once(`${a.filePath}:${paramTag}`, () => out.push(make(b, paramTag, 'structural',
           `(${(a.params ?? []).join(', ')}) → (${(b.params ?? []).join(', ')})`)));
-      } else {
-        // 空白正規化して比較（整形だけの差＝関数↔アロー等の一部ノイズを無視）
-        const ra = normReturns(a.returnExprs);
-        const rb = normReturns(b.returnExprs);
-        if (ra !== rb && (ra || rb)) {
-          once(`${a.filePath}:return-changed`, () => out.push(make(b, 'return-changed', 'semantic',
-            `return: [${ra}] → [${rb}]`)));
-        }
       }
 
-      // 3c) 同期/非同期の変化（await 要否が変わる＝呼び出し側に影響）
+      // 2b) 返り値（整形だけの差＝関数↔アロー等の一部ノイズは空白正規化で無視）
+      const ra = normReturns(a.returnExprs);
+      const rb = normReturns(b.returnExprs);
+      if (ra !== rb && (ra || rb)) {
+        once(`${a.filePath}:return-changed`, () => out.push(make(b, 'return-changed', 'semantic',
+          `return: [${ra}] → [${rb}]`)));
+      }
+
+      // 2c) 同期/非同期の変化（await 要否が変わる＝呼び出し側に影響）
       if ((a.isAsync ?? false) !== (b.isAsync ?? false)) {
         once(`${a.filePath}:sync-to-async`, () => out.push(make(b, 'sync-to-async', 'structural',
           `${a.isAsync ? 'async' : 'sync'} → ${b.isAsync ? 'async' : 'sync'}`)));
       }
 
-      // 3d) 呼び出し形（プロパティ公開パス accessPath）の変化。例: uuid.v4 → 直接
+      // 2d) 呼び出し形（プロパティ公開パス accessPath）の変化。例: uuid.v4 → 直接
       if ((a.accessPath ?? '') !== (b.accessPath ?? '')) {
         once(`${a.filePath}:export-style-changed`, () => out.push(make(b, 'export-style-changed', 'semantic',
           `${a.accessPath || '(直接)'} → ${b.accessPath || '(直接)'}`)));
       }
 
-      // 3e) options オブジェクトの受理キー変化（分割代入 or opts.key 読み取りベース）
+      // 2e) options オブジェクトの受理キー変化（分割代入 or opts.key 読み取りベース）
       const preKeys = new Set(a.optionKeys ?? []);
       const postKeys = new Set(b.optionKeys ?? []);
       if (preKeys.size > 0) {

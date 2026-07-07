@@ -24,6 +24,7 @@ export interface ApiSymbol {
   returnExprs?: string[];  // return 文の式（同一シグネチャでの仕様変更検出に使用）
   isAsync?: boolean;       // async 関数か（await 要否＝同期/非同期の変化検出に使用）
   accessPath?: string;     // プロパティ経由の公開パス（例 "uuid.v4"）。直接 export は undefined
+  optionKeys?: string[];   // 関数が消費する options オブジェクトのキー（分割代入 or opts.key 読み取り）
   filePath: string;        // repo 相対パス
 }
 
@@ -46,6 +47,8 @@ export type ChangeTag =
   | 'arg-removed'
   | 'arg-reordered'
   | 'arg-type-changed'
+  | 'option-removed'       // options オブジェクトの受理キーが消えた（クライアントの指定が無視される）
+  | 'option-added'         // options キー追加（加算的・参考）
   | 'return-changed'
   | 'spec-changed'
   | 'new-required'         // 関数 → class（new 必須化）等
@@ -61,6 +64,19 @@ export type Confidence =
   | 'structural'           // 構造的に確実（削除・arity・new 必須化 等）
   | 'semantic';            // 意味的・要裏付け（仕様変更・検証強化 等）
 
+/** バージョン→ref をどの手段で解決したか（監査用。tag/package-json が高信頼） */
+export type ResolveMethod = 'tag' | 'package-json' | 'git-head' | 'commit-message' | 'unresolved';
+
+/** 外部API絞り込みモード（0=絞り込みなし / 1=test由来 / 2=README由来 / 3=全md由来） */
+export type ScopeMode = 0 | 1 | 2 | 3;
+
+/** 対象ライブラリの import を追跡して得た「実際に使われた API」 */
+export interface ApiUsage {
+  named: Set<string>;      // 名前付き export / プロパティ呼び出し名
+  defaultUsed: boolean;    // デフォルト export を直接使用
+  deepPaths: Set<string>;  // deep import のサブパス（例 'lib/util'）
+}
+
 /** 損失候補 1 件（libDiff=差分取得 の出力 / core 機能1 の入出力） */
 export interface LossCandidate {
   libName: string;
@@ -71,6 +87,7 @@ export interface LossCandidate {
   tag: ChangeTag;
   label: string;           // 損失内容の説明（どんな後方互換性損失かが分かるラベル）
   confidence: Confidence;
+  verdict?: 'loss' | 'review';  // 機能1(judgeLoss)の判定: loss=損失確定 / review=要確認
   detail?: string;         // 補足（before/after の要約など）
 }
 

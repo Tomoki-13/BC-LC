@@ -17,7 +17,7 @@ interface GroundTruth {
   succCount: number;      // stats.success
 }
 
-function main(): void {
+export function runGroundTruth(): void {
   const p = path.resolve(process.cwd(), PROPOSAL);
   if (!fs.existsSync(p)) { console.error(`[Error] 見つかりません: ${p}（make clone-dataset を先に）`); process.exit(1); }
 
@@ -42,10 +42,11 @@ function main(): void {
   // JSON
   fs.writeFileSync(path.join(outDir, 'ground_truth.json'), JSON.stringify(list, null, 2));
 
-  // CSV
+  // CSV（, " 改行を含む値はクオートしてエスケープ）
+  const csv = (v: unknown) => { const s = String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
   const header = 'npm_pkg,nameWithOwner,prevVersion,updatedVersion,state,loss,isBreaking,failCount,succCount\n';
   const rows = list.map(g =>
-    `${g.npm_pkg},${g.nameWithOwner},${g.prevVersion},${g.updatedVersion},${g.state},${g.loss},${g.isBreaking},${g.failCount},${g.succCount}`
+    [g.npm_pkg, g.nameWithOwner, g.prevVersion, g.updatedVersion, g.state, g.loss, g.isBreaking, g.failCount, g.succCount].map(csv).join(',')
   ).join('\n');
   fs.writeFileSync(path.join(outDir, 'ground_truth.csv'), header + rows);
 
@@ -57,4 +58,5 @@ function main(): void {
   console.log(`[Done] ${outDir}/ground_truth.{json,csv}`);
 }
 
-main();
+// CLI 直接実行時のみ（import 時は走らせない）
+if (process.argv[1] && /groundTruth\.(ts|js)$/.test(process.argv[1])) runGroundTruth();

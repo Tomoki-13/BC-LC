@@ -1,6 +1,7 @@
 import * as parser from '@babel/parser';
 import { File } from '@babel/types';
 
+/** ソース文字列を Babel AST にする（拡張子/内容から JSX を自動判定）。入力: パス+内容 / 出力: File or 失敗時 null */
 export const createAstFromFile = (filePath: string, fileContent: string): File | null => {
   try {
     const plugins: parser.ParserPlugin[] = [
@@ -27,6 +28,7 @@ export const createAstFromFile = (filePath: string, fileContent: string): File |
   }
 };
 
+/** パス無しでソース文字列を Babel AST にする（markdown コードフェンス等の断片用）。失敗時 null */
 export const createAstFromContent = (fileContent: string): File | null => {
   try {
     const plugins: parser.ParserPlugin[] = [

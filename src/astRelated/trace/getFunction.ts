@@ -6,7 +6,7 @@ import * as t from '@babel/types';
 const traverse = ((traverseImport as any).default ?? traverseImport) as typeof traverseImport;
 
 import { createAstFromFile } from '../base/createAstFromFile';
-import { ExtendedFunctionMetaInfo, FunctionInfo_funcRange, ExportStyleTag, SymbolKindTag } from '../../../types/FunctionInfo';
+import { ExtendedFunctionMetaInfo, FunctionInfo_funcRange, ExportStyleTag, SymbolKindTag } from '../../types/FunctionInfo';
 
 // options 引数とみなす識別子名（body 内の opts.key 読み取りを拾う対象）
 const OPTION_PARAM_RE = /^(opts?|options?|config|conf|settings?|params?|args)$/i;
@@ -96,9 +96,9 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
     if (!filePath.match(/\.(js|jsx|ts|tsx|mjs|cjs|mts|cts)$/)) return [];
 
     const fileContent: string = await fs.readFile(filePath, 'utf8');
-
+    // 異常な圧縮コードを除外（例: 1行が非常に長い場合）
     if (isObfuscated(fileContent)) {
-      console.log(`File ${filePath} is detected as obfuscated. Skipping function extraction.`);
+      //console.log(`File ${filePath} is detected as obfuscated. Skipping function extraction.`);
       return [];
     }
 

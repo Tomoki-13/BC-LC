@@ -2,12 +2,12 @@ import { promises as fsPromises } from 'fs';
 import traverse, { NodePath } from '@babel/traverse';
 import * as t from '@babel/types';
 
-import { FunctionInfo_funcRange } from '../../../types/FunctionInfo';
+import { FunctionInfo_funcRange } from '../../types/FunctionInfo';
 import { getBasicFunctionInfo} from '../trace/getFunction';
 import { rangeArg } from '../scope/rangeArg';
-import { InboundFunctionDependencies } from '../../../types/FileDependencies';
-import { VariableUsage } from '../../../types/VariableUsage';
-import { ExtractFunctionCallsResult } from '../../../types/ExtractFunctionCallsResult';
+import { InboundFunctionDependencies } from '../../types/FileDependencies';
+import { VariableUsage } from '../../types/VariableUsage';
+import { ExtractFunctionCallsResult } from '../../types/ExtractFunctionCallsResult';
 import { createAstFromFile } from '../base/createAstFromFile';
 
 // 引数まで考慮した関数呼び出しの解析

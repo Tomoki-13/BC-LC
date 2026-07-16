@@ -1,6 +1,6 @@
 import traverse from '@babel/traverse';
 import * as t from '@babel/types';
-import { ScopeRange } from '../../../types/VariableUsage';
+import { ScopeRange } from '../../types/VariableUsage';
 
 
 //変数(variableName)が定義されたすべてのスコープの範囲（start〜end）を取得

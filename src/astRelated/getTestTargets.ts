@@ -2,7 +2,7 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import traverse from '@babel/traverse';
 import * as t from '@babel/types';
-import { createAstFromFile } from './astRelated/base/createAstFromFile';
+import { createAstFromFile } from './base/createAstFromFile';
 
 export interface TestTargetFunction {
   funcName: string;

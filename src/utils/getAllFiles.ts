@@ -1,152 +1,59 @@
 import fs from 'fs/promises';
 import path from 'path';
 
-const SOURCE_EXTENSIONS = new Set([
-  '.js',
-  '.ts',
-  '.jsx',
-  '.tsx',
-  '.cjs',
-  '.mjs',
-]);
+const SOURCE_EXTENSIONS = new Set(['.js', '.ts', '.jsx', '.tsx', '.cjs', '.mjs']);
+const EXCLUDED_SUFFIXES = ['.min.js', '.dev.js', '.lib.js', '.lib.ts', '.bundle.js'];
+const EXCLUDED_FILENAMES = new Set(['.DS_Store']);
+const EXCLUDED_DIRECTORIES = new Set(['node_modules', 'dist', 'build', 'out']);
+const TEST_DIRECTORIES = new Set(['__tests__', '__mocks__', 'test', 'tests', 'spec', 'specs']);
+const TEST_SUFFIXES = ['.test.', '.spec.'];
 
-const EXCLUDED_SUFFIXES = [
-  '.min.js',
-  '.dev.js',
-  '.lib.js',
-  '.lib.ts',
-  '.bundle.js',
-];
-
-const EXCLUDED_FILENAMES = new Set([
-  '.DS_Store',
-]);
-
-const EXCLUDED_DIRECTORIES = new Set([
-  'node_modules',
-  'dist',
-  'build',
-  'out',
-]);
-
-const TEST_DIRECTORIES = new Set([
-  '__tests__',
-  '__mocks__',
-  'test',
-  'tests',
-  'spec',
-  'specs'
-]);
-
-const TEST_SUFFIXES = [
-  '.test.',
-  '.spec.'
-];
-
-export const getAllFiles = async (directoryPath: string): Promise<string[]> => {
-  const allFiles: string[] = [];
-  try {
-    const files = await fs.readdir(directoryPath, { withFileTypes: true });
-    for (const file of files) {
-      const filePath = path.join(directoryPath, file.name);
-
-      if (file.isFile()) {
-        if (isAnalyzableSourceFile(filePath) && !isTestPath(filePath)) {
-          allFiles.push(filePath);
-        }
-      } else if (file.isDirectory()) {
-        if (!isExcludedDirectory(filePath) && !TEST_DIRECTORIES.has(file.name)) {
-          const subFiles = await getAllFiles(filePath);
-          allFiles.push(...subFiles);
-        }
-      }
-    }
-  } catch (err) {
-    console.error('Error reading directory:', err);
-    throw err;
-  }
-
-  return allFiles;
-};
-
-export const getAllTestFiles = async (directoryPath: string): Promise<string[]> => {
-  const allFiles: string[] = [];
-  try {
-    const files = await fs.readdir(directoryPath, { withFileTypes: true });
-    for (const file of files) {
-      const filePath = path.join(directoryPath, file.name);
-
-      if (file.isFile()) {
-        if (isAnalyzableSourceFile(filePath) && isTestPath(filePath)) {
-          allFiles.push(filePath);
-        }
-      } else if (file.isDirectory()) {
-        if (!isExcludedDirectory(filePath)) {
-          const subFiles = await getAllTestFiles(filePath);
-          allFiles.push(...subFiles);
-        }
-      }
-    }
-  } catch (err) {
-    console.error('Error reading directory:', err);
-    throw err;
-  }
-
-  return allFiles;
-};
-
-export const getAllFilesRecursively = async (targetPath: string): Promise<string[]> => {
-  const results: string[] = [];
-  const stats = await fs.stat(targetPath);
-  if (stats.isFile()) {
-    return [targetPath];
-  }
-  const entries = await fs.readdir(targetPath, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.name === '.DS_Store') continue;
-
-    const fullPath = path.join(targetPath, entry.name);
-
-    if (entry.isDirectory()) {
-      const nestedFiles = await getAllFilesRecursively(fullPath);
-      results.push(...nestedFiles);
-    } else if (entry.isFile()) {
-      results.push(fullPath);
-    }
-  }
-  return results;
-};
-
+/** 解析対象の拡張子か、かつミニファイ/除外ファイル名でないか */
 const isAnalyzableSourceFile = (filePath: string): boolean => {
   const fileName = path.basename(filePath);
-  const ext = path.extname(fileName);
-
-  if (!SOURCE_EXTENSIONS.has(ext)) {
-    return false;
-  }
-
-  if (EXCLUDED_SUFFIXES.some((suffix) => fileName.endsWith(suffix))) {
-    return false;
-  }
-
-  if (EXCLUDED_FILENAMES.has(fileName)) {
-    return false;
-  }
-
+  if (!SOURCE_EXTENSIONS.has(path.extname(fileName))) return false;
+  if (EXCLUDED_SUFFIXES.some(suffix => fileName.endsWith(suffix))) return false;
+  if (EXCLUDED_FILENAMES.has(fileName)) return false;
   return true;
 };
 
+/** テストディレクトリ配下 or テスト用サフィックスのファイルか */
 const isTestPath = (filePath: string): boolean => {
   const fileName = path.basename(filePath);
   const segments = filePath.split(path.sep);
-
-  const isInTestDir = segments.some((segment) => TEST_DIRECTORIES.has(segment));
-  const hasTestSuffix = TEST_SUFFIXES.some((suffix) => fileName.includes(suffix));
-
-  return isInTestDir || hasTestSuffix;
+  const inTestDir = segments.some(segment => TEST_DIRECTORIES.has(segment));
+  const hasTestSuffix = TEST_SUFFIXES.some(suffix => fileName.includes(suffix));
+  return inTestDir || hasTestSuffix;
 };
 
-const isExcludedDirectory = (dirPath: string): boolean => {
-  const segments = dirPath.split(path.sep);
-  return segments.some((segment) => EXCLUDED_DIRECTORIES.has(segment));
+/** node_modules / dist / build / out を含むディレクトリか */
+const isExcludedDirectory = (dirPath: string): boolean =>
+  dirPath.split(path.sep).some(segment => EXCLUDED_DIRECTORIES.has(segment));
+
+/**
+ * ディレクトリ配下の「解析対象ソースファイル」を再帰列挙する
+ * 入力: directoryPath（走査起点）
+ * 出力: 絶対/相対パスの配列（テスト・node_modules・dist 等・ミニファイは除外）
+ */
+const getAllFiles = async (directoryPath: string): Promise<string[]> => {
+  const collected: string[] = [];
+  try {
+    const entries = await fs.readdir(directoryPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryPath = path.join(directoryPath, entry.name);
+      if (entry.isFile()) {
+        if (isAnalyzableSourceFile(entryPath) && !isTestPath(entryPath)) collected.push(entryPath);
+      } else if (entry.isDirectory()) {
+        if (!isExcludedDirectory(entryPath) && !TEST_DIRECTORIES.has(entry.name)) {
+          collected.push(...await getAllFiles(entryPath));
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error reading directory:', err);
+    throw err;
+  }
+  return collected;
 };
+
+export default getAllFiles;

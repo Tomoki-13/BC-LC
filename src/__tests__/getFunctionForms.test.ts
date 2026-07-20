@@ -1,4 +1,4 @@
-import { getFunction } from '../analyzer/astRelated/trace/getFunction';
+import { getFunction } from '../astRelated/trace/getFunction';
 import type { ExtendedFunctionMetaInfo } from '../types/FunctionInfo';
 
 // 各 export/関数形を1ファイルずつ用意し、getFunction が取りこぼさず抽出できるか検証する

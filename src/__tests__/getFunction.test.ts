@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 
-import { getFunction, getBasicFunctionInfo } from "../analyzer/astRelated/trace/getFunction";
+import { getFunction, getBasicFunctionInfo } from "../astRelated/trace/getFunction";
 import { FunctionInfo_funcRange } from '../types/FunctionInfo';
 
 // 実行環境による改行コード差分などで発生する start/end のズレを無視してロジック検証を行うヘルパー

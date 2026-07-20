@@ -1,6 +1,3 @@
-// libDiff（段階1）共通型
-// ライブラリ pre/post の API surface → 差分 → 損失候補（タグ + confidence）
-
 // ---- API surface（pre/post 各バージョンの外部 API） ----
 
 /** export の束縛形態 */
@@ -34,6 +31,7 @@ export interface ApiSurface {
   tag: string;             // 解決済み git タグ
   scope: 'export' | 'all'; // 選択肢A=export / 選択肢C=全 top-level
   symbols: ApiSymbol[];
+  engines?: { node?: string; npm?: string }; // package.json engines（必要ランタイム版・range 文字列）
 }
 
 // ---- 損失候補（差分結果。L2 で生成） ----
@@ -56,7 +54,7 @@ export type ChangeTag =
   | 'export-style-changed' // cjs/esm・named/default の変化
   | 'module-format-changed'
   | 'deep-import-broken'
-  | 'engines-changed'
+  | 'node-npm-requirement-raised'
   | 'dependency-changed';
 
 /** 静的検出の確信度 */
@@ -87,7 +85,7 @@ export interface LossCandidate {
   tag: ChangeTag;
   label: string;           // 損失内容の説明（どんな後方互換性損失かが分かるラベル）
   confidence: Confidence;
-  verdict?: 'loss' | 'review';  // 機能1(judgeLoss)の判定: loss=損失確定 / review=要確認
+  verdict?: 'loss';        // 機能1(judgeLoss): 全候補を loss と判定。確実/要確認は confidence 参照
   detail?: string;         // 補足（before/after の要約など）
 }
 

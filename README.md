@@ -6,6 +6,117 @@ P2: **ライブラリ情報起点**の後方互換性損失パターン生成（
 
 ---
 
+## libDiff — バージョン前後差分から後方互換性の損失候補を検出
+
+ライブラリの pre/post を比較し、**関数の削除・引数変化・返り値変化・同期/非同期化・deep-import 破壊・公開形変化**などを
+ラベル付きで抽出する（`src/index.ts` + `src/libDiff/` + `src/core/`）。
+
+### 実行（3コマンド）
+```sh
+make run-sample   # 全損失タグ網羅のサンプル(sample/testLib)で確認
+make run-uuid     # uuid 3.4.0 → 7.0.0-beta.0
+make run-globby   # globby 6.1.0 → 7.0.0
+# 任意: cd src && npx tsx index.ts --pair <lib> <pre> <post>   /   --local <dir> <名前>   /   <lib>(npm全版)
+```
+
+### 出力（history + latest）
+```
+outputs/history/BC-LC/libDiff/<RUN_ID>/<lib>/   … 実行ごとにアーカイブ
+outputs/latest/BC-LC/libDiff/<lib>/             … lib 単位で最新を蓄積
+  surfaces/<cleanVer>.json          版ごとの export surface（name/params/returnExprs/isAsync/accessPath）
+  pairs/<pre>__<post>.json          損失候補（symbol/tag/label/confidence/verdict/detail）
+  summary.json                      tag/confidence/verdict 別の集計
+```
+
+### 損失候補の見方
+- **confidence**: `structural`=構造的に確実 / `semantic`=要確認（本体差分等）
+- **verdict**（機能1 judgeLoss）: `loss`=損失確定（structural）/ `review`=要確認（semantic）
+- **tag**: `function-removed / arg-added / arg-removed / arg-reordered / return-changed / sync-to-async / deep-import-broken / export-style-changed / option-removed / node-npm-requirement-raised`
+  - 引数の**単なるリネーム**（位置引数）は破壊的でないため検出しない（ノイズ低減）
+  - `node-npm-requirement-raised`: `package.json` の `engines.node` / `engines.npm` の**必要下限が引き上げられた**場合（新規付与含む）。それ未満のランタイム利用者が install/実行で壊れる。下限の低下・制約撤廃は非検出
+
+> 未実装: 機能2 `generatePattern`（P1 形式のパターン生成）。exportStyle/module-format 検出は TODO（`docs/DESIGN-P2.md`）。
+
+---
+
+## 評価パイプライン — ground_truth との突合で精度を測る
+
+役割で3段に分けている。**重い検出は1回だけ**走らせ、その出力 `records.json` を採点・分析が共有して読む（単一パス）。
+
+| 段 | 役割 | ソース | 出力先 | コスト |
+|---|---|---|---|---|
+| **A 事実生成** | 全ペアを検出（clone→surface→diff） | `evaluation/runDetection.ts` | `detection/records.json` | **重い**（唯一 clone/解析するパス）|
+| **B 採点** | 事実を正解と突合し混同行列 | `evaluation/compare.ts` | `eval/` | 軽い（records を読むだけ）|
+| **C 分析** | 特徴量の精査（FP源・ポリシー掃引・return内訳）| `analysis/*.ts` | `analysis/<tool>/` | 軽い（records を読むだけ）|
+| **B' 比較** | 外部API絞り込み mode0/1/2/3 の精度比較 | `evaluation/scopeCompare.ts` | `eval/scope_compare.json` | **重い**（surface を別途作り直す）|
+
+正解ラベル生成（`evaluation/groundTruth.ts`）が先頭に付く。`state`=クライアントテスト結果、`loss = state==='failure'`。
+
+### 実行
+```sh
+make run            # A→B→C→scope を一括（index.ts だけで scope 含む全結果）
+make detect         # A のみ: records.json を作り直す
+make compare        # B のみ: 既存 records.json を再採点（検出しないので高速）
+make tag-analysis   # C: タグ別 fail/succ（FPノイズ源）
+make pair-tags      # C: 損失定義ポリシー掃引
+make return-analysis# C: return-changed の内部兆候
+make scope          # mode0/1/2/3 の精度比較だけ単独で（高コスト）
+make show-result    # 直近の混同行列を表示
+# N=5 で先頭5libのパイロット（detect / scope）: make detect N=5
+```
+
+`make run` は既存 latest を消さず上書き更新する（各出力は `mkdir -p` 相当で、消えるのは同名ファイルのみ）。
+
+### 出力（`outputs/latest/BC-LC/`）
+```
+detection/
+  records.json          全ペアの検出事実（status/reason/candidates[{tag,detail,confidence}]）＝B/Cの共通入力
+eval/
+  ground_truth.json     正解ラベル（npm_pkg/prev/updated/state/loss）
+  compare_summary.json  混同行列・precision/recall/accuracy/f1・除外理由の集計
+  evaluation.csv        評価できたペアごと（test_result/predicted_loss/category/tags/causes）
+  excluded_pairs.csv    評価不能ペアと理由（ref未解決/clone失敗/surface空 等）
+  label_distribution.csv タグ別 TP/FP/precision（Positive 判定の理由分布）
+  compare_detail.csv    全ペアの素の判定（後方互換の列）
+  scope_compare.json    mode0/1/2/3 の混同行列（make scope 実行時のみ）
+analysis/
+  tagAnalysis/tag_analysis.json     タグ/confidence 別 fail-succ（FPノイズ源）
+  pairTags/pair_tags.json           ペア別タグ集合（掃引の入力）
+  pairTags/policy_sweep.json        損失定義ポリシー別の混同行列
+  returnAnalysis/return_analysis.json return-changed の兆候別内訳
+audit/
+  resolution_log.csv / run.log / run_summary.json   バージョン解決手段・警告・エラー
+```
+
+### ソース構成
+```
+src/evaluation/   A+B: 事実生成と採点
+  groundTruth.ts    正解ラベル生成
+  runDetection.ts   ★重い1パス: 全ペア検出 → records.json（＋audit）
+  compare.ts        records → 混同行列・各CSV（採点）
+  scopeCompare.ts   mode比較（surface 4回・別軸）
+src/analysis/     C: records から派生する探索的分析（軽い）
+  tagAnalysis.ts / pairTags.ts / returnAnalysis.ts
+src/utils/evalShared.ts  共通基盤（パス定数/型/loadGroundTruth/loadRecords/computeMetrics 等）
+```
+
+---
+
+## 調査（BC-sample）— 一時的な探索。本線 BC-LC と分離
+
+恒久評価でない実験的調査はここに出す（`outputs/latest/BC-sample/<調査名>/`、履歴は `outputs/history/BC-sample/<timestamp>/<調査名>/`）。
+
+### depImpact — 間接依存起因の見落とし（実装途上）
+
+ライブラリ自身の API は不変でも、**依存の bump** が損失を運んでクライアントを壊すケース（例: globby 自身は不変だが依存 `glob` が major bump）を測る。
+
+- `runDetection` が packument から pre/post の依存(`dependencies`+`peerDependencies`)の range 変化を `records.json` の `depChanges` に**別枠で**記録する（`candidates` と分離＝採点・FN判定・scope には不使用）
+- `make dep-impact` が category 別に依存 major-bump 率を集計し、**FN（見逃し）と TN の率を比較**する
+  - FN の major-bump 率が TN より十分高ければ「依存 bump は見落としを説明する識別力ある signal」→ 依存の再帰解析(Lv2)に進む価値あり。FN≈TN なら依存は主因でないと判断
+  - 出力: `BC-sample/depImpact/fn_dep_correlation.json`（FN ペアで major-bump した依存名一覧つき）
+
+---
+
 ## collectDataset — データセット収集
 
 特定ライブラリの**更新後バージョン(target)** を指定すると、

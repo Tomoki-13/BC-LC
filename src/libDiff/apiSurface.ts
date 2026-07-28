@@ -1,9 +1,25 @@
+import fs from 'fs';
 import path from 'path';
-import { getAllFiles } from '../utils/getAllFiles';
-import { getFunction } from '../analyzer/astRelated/trace/getFunction';
+import getAllFiles from '../utils/getAllFiles';
+import { getFunction } from '../astRelated/trace/getFunction';
 import type { ApiSymbol, ApiSurface, ExportStyle, SymbolKind } from '../types/LibDiff';
 
 const SOURCE_EXT = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'];
+
+/** package.json の engines(node/npm) を読む．入力: repo/版ツリー / 出力: {node?,npm?}（無ければ undefined） */
+function readEngines(treeDir: string): { node?: string; npm?: string } | undefined {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(treeDir, 'package.json'), 'utf-8'));
+    const engines = pkg?.engines;
+    if (!engines || typeof engines !== 'object') return undefined;
+    const result: { node?: string; npm?: string } = {};
+    if (typeof engines.node === 'string') result.node = engines.node;
+    if (typeof engines.npm === 'string') result.npm = engines.npm;
+    return result.node || result.npm ? result : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** ツリー配下の解析対象ソースを列挙（除外方針は getAllFiles に準拠） */
 async function listSourceFiles(treeDir: string): Promise<string[]> {
@@ -34,7 +50,7 @@ async function buildApiSurface(treeDir: string, version: string, tag: string): P
   for (const f of await listSourceFiles(treeDir)) {
     symbols.push(...await extractExports(f, treeDir));
   }
-  return { version, tag, scope: 'export', symbols };
+  return { version, tag, scope: 'export', symbols, engines: readEngines(treeDir) };
 }
 
 export default {

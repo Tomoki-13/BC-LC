@@ -1,27 +1,28 @@
+import semver from 'semver';
 import type { ApiSurface, ApiSymbol, LossCandidate, ChangeTag, Confidence } from '../types/LibDiff';
 
 /** どんな後方互換性の損失かを表すラベル（結果を見て損失内容が分かるように） */
 function labelOf(tag: ChangeTag): string {
   switch (tag) {
-    case 'function-removed':     return 'export 関数の削除（呼び出し不可）';
-    case 'module-removed':       return 'モジュールの削除';
-    case 'arg-added':            return '引数の増加（必須化なら呼び出し側で不足）';
-    case 'arg-removed':          return '引数の削除（余剰引数になる）';
-    case 'arg-reordered':        return '引数の並び替え（位置がずれる＝破壊的）';
-    case 'arg-type-changed':     return '引数の型変更';
-    case 'option-removed':       return 'options キーの削除（クライアントの指定が無視される）';
-    case 'option-added':         return 'options キーの追加（加算的・参考）';
-    case 'return-changed':       return '返り値・仕様の変更（同一シグネチャ）';
-    case 'spec-changed':         return '仕様変更';
-    case 'new-required':         return 'new 必須化/禁止化';
-    case 'sync-to-async':        return '同期→非同期の変化（await 要否が変わる）';
-    case 'export-style-changed': return '呼び出し形/公開形式の変更（プロパティ経由など）';
-    case 'module-format-changed':return 'モジュール形式の変更（CJS/ESM）';
-    case 'deep-import-broken':   return '内部パス移動（deep import 破壊）';
-    case 'engines-changed':      return '実行環境要求の変更（engines）';
-    case 'dependency-changed':   return '依存の変更';
-    case 'rename':               return 'リネーム';
-    default:                     return String(tag);
+    case 'function-removed':            return 'export 関数の削除（呼び出し不可）';
+    case 'module-removed':              return 'モジュールの削除';
+    case 'arg-added':                   return '引数の増加（必須化なら呼び出し側で不足）';
+    case 'arg-removed':                 return '引数の削除（余剰引数になる）';
+    case 'arg-reordered':               return '引数の並び替え（位置がずれる＝破壊的）';
+    case 'arg-type-changed':            return '引数の型変更';
+    case 'option-removed':              return 'options キーの削除（クライアントの指定が無視される）';
+    case 'option-added':                return 'options キーの追加（加算的・参考）';
+    case 'return-changed':              return '返り値・仕様の変更（同一シグネチャ）';
+    case 'spec-changed':                return '仕様変更';
+    case 'new-required':                return 'new 必須化/禁止化';
+    case 'sync-to-async':               return '同期→非同期の変化（await 要否が変わる）';
+    case 'export-style-changed':        return '呼び出し形/公開形式の変更（プロパティ経由など）';
+    case 'module-format-changed':       return 'モジュール形式の変更（CJS/ESM）';
+    case 'deep-import-broken':          return '内部パス移動（deep import 破壊）';
+    case 'node-npm-requirement-raised': return 'node/npm の必要バージョン引き上げ（engines・それ未満の利用者が install/実行不可）';
+    case 'dependency-changed':          return '依存の変更';
+    case 'rename':                      return 'リネーム';
+    default:                            return String(tag);
   }
 }
 
@@ -51,6 +52,28 @@ function diffParams(pre: string[], post: string[]): ChangeTag | null {
 /** 返り値式の比較用に空白を正規化（整形だけの差を無視する） */
 function normReturns(arr: string[] | undefined): string {
   return (arr ?? []).join(' || ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * engines(node/npm) の必要下限が pre→post で引き上げられたか判定する
+ *   入力: field=対象(node|npm) / preRange・postRange=各版の engines range 文字列（例 ">=12"。宣言なしは undefined）
+ *   出力: 引き上げ・新規付与のときは変化を説明する文字列(detail)、それ以外（同じ/下がった/撤廃）は null
+ */
+function raisedEngineFloor(field: 'node' | 'npm', preRange?: string, postRange?: string): string | null {
+  if (!postRange) return null;                       // post に要求なし → 制約なし/緩和
+  const postMin = semver.minVersion(postRange);
+  if (!postMin) return null;                         // range として解釈不能
+  if (!preRange) {
+    // pre に要求なし → 新規に下限追加（"*"/">=0" 等の実質無制限は除外）
+    return semver.gt(postMin, '0.0.0')
+      ? `engines.${field}: (なし) → ${postRange}（新規に ${postMin.version} 以上を要求）`
+      : null;
+  }
+  const preMin = semver.minVersion(preRange);
+  if (preMin && semver.gt(postMin, preMin)) {
+    return `engines.${field}: ${preRange} → ${postRange}（下限 ${preMin.version} → ${postMin.version}）`;
+  }
+  return null;
 }
 
 /** pre/post の surface を突き合わせ、後方互換性の損失候補を返す */
@@ -147,6 +170,24 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
             `削除キー: ${removed.join(', ')}`)));
         }
       }
+    }
+  }
+
+  // engines(node/npm) の必要下限引き上げ＝それ未満のランタイム利用者が install/実行で壊れる（symbol 非依存）
+  for (const field of ['node', 'npm'] as const) {
+    const detail = raisedEngineFloor(field, pre.engines?.[field], post.engines?.[field]);
+    if (detail) {
+      out.push({
+        libName,
+        preVersion: pre.version,
+        postVersion: post.version,
+        symbol: `engines.${field}`,   // 関数ではないので symbol 欄には対象名 engines.node / engines.npm を入れる
+        filePath: 'package.json',      // 検出元は package.json（ソースファイルではない）
+        tag: 'node-npm-requirement-raised',
+        label: labelOf('node-npm-requirement-raised'),
+        confidence: 'structural',      // package.json の確定事実なので構造的（確実）
+        detail,                        // 例 "engines.node: >=8 → >=10（下限 8.0.0 → 10.0.0）"
+      });
     }
   }
 

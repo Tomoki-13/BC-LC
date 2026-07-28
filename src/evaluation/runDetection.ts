@@ -118,6 +118,7 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
       const candidates: LossCandidate[] = DiffSurface.diffSurface(preSurface.surface, postSurface.surface, libName)
         .map((c: any) => ({ tag: c.tag, detail: c.detail ?? c.label ?? '', confidence: c.confidence ?? '' }));
       // 依存 range 変化を signal として別枠で記録（採点は candidates のみ・depChanges は不使用）
+      //TODO:実験用
       const depChanges = diffDeps(packument?.versions?.[pair.prevVersion], packument?.versions?.[pair.updatedVersion]);
       records.push({ ...pair, status: 'evaluated', reason: 'ok', candidates, depChanges });
     }

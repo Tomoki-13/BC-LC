@@ -13,7 +13,7 @@ interface GroundTruth {
   updatedVersion: string;
   state: 'success' | 'failure';
   loss: boolean;          // 損失あり = state==='failure'
-  isBreaking: boolean;    // 参考: proposal ツールの予測値（正解ではない）
+  isBreakingByMatsuda: boolean;  // 松田研究 proposal ツールの予測値（データセット側の参考値，本手法の判定でも正解でもない）
   failCount: number;      // stats.failure（何クライアントで失敗したか）
   succCount: number;      // stats.success
 }
@@ -32,7 +32,7 @@ export function runGroundTruth(): void {
       updatedVersion: e.updated.version,
       state: e.state,
       loss: e.state === 'failure',
-      isBreaking: !!e.isBreaking,
+      isBreakingByMatsuda: !!e.isBreaking,
       failCount: e.stats?.failure ?? 0,
       succCount: e.stats?.success ?? 0,
     }));
@@ -44,9 +44,9 @@ export function runGroundTruth(): void {
   fs.writeFileSync(path.join(outDir, 'ground_truth.json'), JSON.stringify(list, null, 2));
 
   // CSV（, " 改行を含む値はクオートしてエスケープ）
-  const header = 'npm_pkg,nameWithOwner,prevVersion,updatedVersion,state,loss,isBreaking,failCount,succCount\n';
+  const header = 'npm_pkg,nameWithOwner,prevVersion,updatedVersion,state,loss,isBreakingByMatsuda,failCount,succCount\n';
   const rows = list.map(g =>
-    [g.npm_pkg, g.nameWithOwner, g.prevVersion, g.updatedVersion, g.state, g.loss, g.isBreaking, g.failCount, g.succCount].map(toCsvCell).join(',')
+    [g.npm_pkg, g.nameWithOwner, g.prevVersion, g.updatedVersion, g.state, g.loss, g.isBreakingByMatsuda, g.failCount, g.succCount].map(toCsvCell).join(',')
   ).join('\n');
   fs.writeFileSync(path.join(outDir, 'ground_truth.csv'), header + rows);
 

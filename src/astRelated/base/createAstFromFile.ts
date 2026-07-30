@@ -1,18 +1,21 @@
 import * as parser from '@babel/parser';
 import { File } from '@babel/types';
 
-/** ソース文字列を Babel AST にする（拡張子/内容から JSX を自動判定）。入力: パス+内容 / 出力: File or 失敗時 null */
+/**
+ * ソース文字列を Babel AST にする（拡張子で TS/JSX プラグインを出し分け）入力: パス+内容 / 出力: File or 失敗時 null
+ *   .ts/.mts/.cts/.tsx のみ typescript プラグインを付ける。
+ *   プレーン JS(.js/.mjs/.cjs) に typescript を付けると `<` を TS ジェネリックと誤解釈して parse 失敗するため付けない。
+ */
 export const createAstFromFile = (filePath: string, fileContent: string): File | null => {
   try {
-    const plugins: parser.ParserPlugin[] = [
-      'typescript',                // TypeScript構文
-      'decorators-legacy',         // デコレーター
-    ];
+    const isTypeScript = /\.(ts|mts|cts|tsx)$/.test(filePath);
+    const plugins: parser.ParserPlugin[] = ['decorators-legacy'];
+    if (isTypeScript) plugins.push('typescript');
 
-    // JSX対応（TSXやJSXが含まれる場合）
-    if (filePath.endsWith('.tsx') || filePath.endsWith('.jsx') || /<[A-Za-z]/.test(fileContent)) {
-      plugins.push('jsx');
-    }
+    // JSX: .tsx/.jsx は確定。JS は JSX 断片が見えるときのみ（.ts は generics と衝突するので付けない）
+    const wantsJsx = filePath.endsWith('.tsx') || filePath.endsWith('.jsx')
+      || (!isTypeScript && /<[A-Za-z]/.test(fileContent));
+    if (wantsJsx) plugins.push('jsx');
 
     const ast = parser.parse(fileContent, {
       sourceType: 'unambiguous',

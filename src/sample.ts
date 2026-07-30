@@ -1,6 +1,3 @@
-// 動作確認用ランナー: サンプル(sample/libDiffSample)の pre/post で surface 抽出と diff を表示
-// 実行: cd BC-LC/src && npx tsx sample.ts
-
 import path from 'path';
 import ApiSurface from './libDiff/apiSurface';
 import DiffSurface from './libDiff/diffSurface';

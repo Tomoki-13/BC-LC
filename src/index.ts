@@ -29,6 +29,8 @@ const PATHS = {
   libCloneBase: '../../clonedata/lib_versions',                       // <lib>/（全版入りの単一クローン・使い捨て）
   historyBase: `../../outputs/history/BC-LC/libDiff/${RUN_ID}`,       // <lib>/{surfaces,pairs}/
   latestBase: '../../outputs/latest/BC-LC/libDiff',                   // <lib>/{surfaces,pairs}/
+  evalLatestBase: '../../outputs/latest/BC-LC',                       // eval パイプラインの最新出力（毎回上書き）
+  evalHistoryBase: `../../outputs/history/BC-LC/eval/${RUN_ID}`,      // 実行ごとの eval 結果アーカイブ（消さず積む）
 };
 
 const cleanVersion = (v: string): string => v.replace(/[^a-zA-Z0-9]/g, '');
@@ -57,6 +59,29 @@ function writeSummary(safeName: string, libraryName: string, losses: LossCandida
     { library: libraryName, totalLosses: losses.length, byConfidence, byTag, generatedAt: new Date().toISOString() },
     null, 2));
   console.log(`[Summary] losses=${losses.length} (確実=${byConfidence.structural}, 要確認=${byConfidence.semantic}) → ${out}`);
+}
+
+/**
+ * eval パイプラインの latest 出力を history/eval/<RUN_ID>/ に必ず退避する（履歴は消さず積む）
+ * 実行日時は ディレクトリ名(RUN_ID=YYYY-MM-DD-HH-mm-ss) と run_info.json の両方に記録し、
+ * どの結果がいつのものか一意に分かるようにする
+ */
+function archiveEvalToHistory(): void {
+  const latest = path.resolve(process.cwd(), PATHS.evalLatestBase);
+  const history = path.resolve(process.cwd(), PATHS.evalHistoryBase);
+  fs.mkdirSync(history, { recursive: true });
+  for (const sub of ['detection', 'eval', 'analysis', 'audit']) {
+    const src = path.join(latest, sub);
+    if (fs.existsSync(src)) fs.cpSync(src, path.join(history, sub), { recursive: true });
+  }
+  // 混同行列を run_info に同梱して、日時と結果の対応を1ファイルで追える
+  let confusion: unknown = null;
+  try {
+    confusion = JSON.parse(fs.readFileSync(path.join(latest, 'eval', 'compare_summary.json'), 'utf-8')).confusion;
+  } catch { /* 無ければ null */ }
+  fs.writeFileSync(path.join(history, 'run_info.json'), JSON.stringify(
+    { runId: RUN_ID, archivedAt: new Date().toISOString(), confusion }, null, 2));
+  console.log(`[Archive] eval 結果を保存 → ${history}`);
 }
 
 /** history/<RUN_ID>/<lib> を latest/<lib> にコピー（lib 単位で latest を更新・蓄積） */
@@ -263,6 +288,7 @@ async function main(): Promise<void> {
   runPairTags();             // 分析 → analysis/pairTags/
   runReturnAnalysis();       // 分析 → analysis/returnAnalysis/
   await runScopeCompare();   // 比較 → eval/scope_compare.json（surface を別途作り直す重いパス）
+  archiveEvalToHistory();    // ★latest を history/eval/<RUN_ID> に必ず退避（日時付きで履歴を残す）
 }
 
 main().catch(e => {

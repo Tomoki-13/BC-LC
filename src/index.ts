@@ -11,7 +11,14 @@ import LibRepo from './libDiff/libRepo';                    // 差分取得: git
 import JudgeLoss from './core/judgeLoss';                   // 機能1: 損失判定
 import GeneratePattern from './core/generatePattern';       // 機能2: パターン化
 import { fetchVersionList, fetchVersionMeta, extractRepositoryUrl } from './collectDataset/npm/registry';
-import type { ApiSurface } from './types/LibDiff';
+import { runGroundTruth } from './evaluation/groundTruth';   // 正解ラベル生成
+import { runDetection } from './evaluation/runDetection';    // 事実生成: 全ペア検出 → records.json
+import { runCompare } from './evaluation/compare';           // 採点: records → 混同行列
+import { runScopeCompare } from './evaluation/scopeCompare'; // 比較: 外部API絞り込み mode0/1/2/3
+import { runTagAnalysis } from './analysis/tagAnalysis';     // 分析: タグ別ノイズ源
+import { runPairTags } from './analysis/pairTags';           // 分析: 損失定義ポリシー比較
+import { runReturnAnalysis } from './analysis/returnAnalysis'; // 分析: return-changed 内訳
+import type { ApiSurface, LossCandidate } from './types/LibDiff';
 
 // 実行 ID（Meta の BCPG_RUN_ID を優先、無ければ生成）
 // 出力は history/BC-LC/libDiff/<RUN_ID>/<lib>/ に書き、実行末尾で latest/BC-LC/libDiff/<lib>/ にコピー
@@ -33,6 +40,24 @@ const pairPath = (safeName: string, cvPre: string, cvPost: string): string =>
   path.resolve(process.cwd(), PATHS.historyBase, safeName, 'pairs', `${cvPre}__${cvPost}.json`);
 const patternPath = (safeName: string, cvPre: string, cvPost: string): string =>
   path.resolve(process.cwd(), PATHS.historyBase, safeName, 'patterns', `${cvPre}__${cvPost}.json`);
+const summaryPath = (safeName: string): string =>
+  path.resolve(process.cwd(), PATHS.historyBase, safeName, 'summary.json');
+
+/** ラン全体の損失候補を tag / confidence 別に集計して summary.json に書く（全件 loss。確実/要確認は confidence） */
+function writeSummary(safeName: string, libraryName: string, losses: LossCandidate[]): void {
+  const byTag: Record<string, number> = {};
+  const byConfidence: Record<string, number> = { structural: 0, semantic: 0 };
+  for (const c of losses) {
+    byTag[c.tag] = (byTag[c.tag] ?? 0) + 1;
+    byConfidence[c.confidence] = (byConfidence[c.confidence] ?? 0) + 1;
+  }
+  const out = summaryPath(safeName);
+  OutputJson.createOutputDirectory(path.dirname(out));
+  fs.writeFileSync(out, JSON.stringify(
+    { library: libraryName, totalLosses: losses.length, byConfidence, byTag, generatedAt: new Date().toISOString() },
+    null, 2));
+  console.log(`[Summary] losses=${losses.length} (確実=${byConfidence.structural}, 要確認=${byConfidence.semantic}) → ${out}`);
+}
 
 /** history/<RUN_ID>/<lib> を latest/<lib> にコピー（lib 単位で latest を更新・蓄積） */
 function copyToLatest(safeName: string): void {
@@ -43,12 +68,6 @@ function copyToLatest(safeName: string): void {
   fs.mkdirSync(path.dirname(dst), { recursive: true });
   fs.cpSync(src, dst, { recursive: true });
   console.log(`[Latest] ${dst}`);
-}
-
-function parseArgs(): { libraryName: string } {
-  const [lib] = process.argv.slice(2);
-  if (!lib) { console.error('使い方: npx tsx index.ts <lib>'); process.exit(1); }
-  return { libraryName: lib };
 }
 
 /** 解析対象の版一覧（semver 昇順。マイナー含む全公開版） */
@@ -90,6 +109,7 @@ async function buildSurfaces(repoDir: string, safeName: string, versions: string
 
 /** 連続する版ペアごとに: 差分取得 → 損失判定(機能1) → パターン化(機能2) */
 function diffPairs(libraryName: string, safeName: string, versions: string[]): void {
+  const allLosses: LossCandidate[] = [];
   for (let i = 0; i + 1 < versions.length; i++) {
     const pre = versions[i];
     const post = versions[i + 1];
@@ -101,11 +121,13 @@ function diffPairs(libraryName: string, safeName: string, versions: string[]): v
     const changes = DiffSurface.diffSurface(preSurface, postSurface, libraryName);
     // 機能1: 後方互換性の損失を判定
     const losses = JudgeLoss.judge(changes);
+    allLosses.push(...losses);
     const lossOut = pairPath(safeName, cleanVersion(pre), cleanVersion(post));
     OutputJson.createOutputDirectory(path.dirname(lossOut));
     fs.writeFileSync(lossOut, JSON.stringify(losses, null, 2));
 
     // 機能2: 損失をパターン化（あれば出力）
+    //TODO:未実装で箱だけ用意
     const patterns = GeneratePattern.generate(losses);
     if (patterns.length > 0) {
       const patOut = patternPath(safeName, cleanVersion(pre), cleanVersion(post));
@@ -115,6 +137,7 @@ function diffPairs(libraryName: string, safeName: string, versions: string[]): v
 
     console.log(`[Diff] ${pre} → ${post}: losses=${losses.length}, patterns=${patterns.length}`);
   }
+  writeSummary(safeName, libraryName, allLosses);
 }
 
 /**
@@ -145,21 +168,11 @@ async function runLocal(dirArg: string, nameArg?: string): Promise<void> {
   console.log(`[Done] 出力(latest): ${path.resolve(process.cwd(), PATHS.latestBase, safeName)}`);
 }
 
-/** タグ解決（無ければ npm の gitHead コミットで代替。beta 等タグ無し版むけ） */
+/** タグ → gitHead → コミットメッセージ の順で解決（タグ無し beta / 古い版むけ） */
 async function resolveRef(repoDir: string, lib: string, version: string): Promise<string | null> {
-  const tag = LibRepo.resolveTag(repoDir, version);
-  if (tag) return tag;
-  try {
-    const meta = await fetchVersionMeta(lib, version);
-    const sha = meta?.gitHead;
-    if (sha) {
-      execSync(`git -C "${repoDir}" cat-file -t ${sha}`, { stdio: 'ignore' });
-      return sha;
-    }
-  } catch {
-    /* fallback 失敗 */
-  }
-  return null;
+  let gitHead: string | null = null;
+  try { gitHead = (await fetchVersionMeta(lib, version))?.gitHead ?? null; } catch { /* メタ取得失敗 */ }
+  return LibRepo.resolveRef(repoDir, version, gitHead);
 }
 
 /**
@@ -207,23 +220,14 @@ async function runPair(lib: string, pre: string, post: string): Promise<void> {
     fs.writeFileSync(po, JSON.stringify(patterns, null, 2));
   }
 
+  writeSummary(safeName, lib, losses);
   copyToLatest(safeName);
   console.log(`[Diff] ${lib} ${pre} → ${post}: exports ${preSurface.symbols.length}→${postSurface.symbols.length}, losses=${losses.length}`);
   console.log(`[Done] 出力(latest): ${path.resolve(process.cwd(), PATHS.latestBase, safeName, 'pairs', `${cleanVersion(pre)}__${cleanVersion(post)}.json`)}`);
 }
 
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  if (args[0] === '--local') {
-    await runLocal(args[1], args[2]);
-    return;
-  }
-  if (args[0] === '--pair') {
-    await runPair(args[1], args[2], args[3]);
-    return;
-  }
-
-  const { libraryName } = parseArgs();
+/** 単一ライブラリの全公開版を連続比較する検出モード（任意。npx tsx index.ts <lib>） */
+async function runSingleLib(libraryName: string): Promise<void> {
   const safeName = safe(libraryName);
   const repoDir = path.resolve(process.cwd(), PATHS.libCloneBase, safeName);
 
@@ -240,8 +244,25 @@ async function main(): Promise<void> {
   await buildSurfaces(repoDir, safeName, versions);
   diffPairs(libraryName, safeName, versions);
   copyToLatest(safeName);
-
   console.log(`[Done] 出力(latest): ${path.resolve(process.cwd(), PATHS.latestBase, safeName)}`);
+}
+
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  // 開発/デモ用の個別モード
+  if (args[0] === '--local') { await runLocal(args[1], args[2]); return; }
+  if (args[0] === '--pair') { await runPair(args[1], args[2], args[3]); return; }
+  if (args[0] && !args[0].startsWith('--')) { await runSingleLib(args[0]); return; }
+
+  // 引数なし = フルパイプライン。重い検出パス(runDetection)は1回だけ走らせ，
+  // その出力 records.json を採点(compare)・分析(3種)が共有して読む（単一パス）
+  runGroundTruth();          // 正解ラベル → eval/ground_truth.json
+  await runDetection();      // 事実生成（重いパス）→ detection/records.json
+  runCompare();              // 採点 → eval/compare_summary.json 他
+  runTagAnalysis();          // 分析 → analysis/tagAnalysis/
+  runPairTags();             // 分析 → analysis/pairTags/
+  runReturnAnalysis();       // 分析 → analysis/returnAnalysis/
+  await runScopeCompare();   // 比較 → eval/scope_compare.json（surface を別途作り直す重いパス）
 }
 
 main().catch(e => {

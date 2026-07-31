@@ -54,7 +54,7 @@ export default class RunLogger {
 
     process.stderr.write(
       `\n[runLogger] 解決 ${this.resolutions.length}件 手段別=${JSON.stringify(byMethod)} / 要確認 ${summary.needsCheck.length}件 / ERROR ${summary.errors} WARN ${summary.warnings}\n` +
-      `  → ${path.join(outDir, 'resolution_log.csv')}\n  → ${path.join(outDir, name + '_run.log')}\n  → ${path.join(outDir, name + '_run_summary.json')}\n`
+      `  → ${path.join(outDir, 'resolution_log.csv')}\n  → ${path.join(outDir, name + '_run.log')}\n  → ${path.join(outDir, name + '_run_summary.json')}\n`,
     );
   }
 }

@@ -76,7 +76,7 @@ export const funcNameIdentifiers = (line: string, libraryName: string): string[]
   } else {
     return [];
   }
-}
+};
 
 export const secfuncNameIdentifiers = (functionName: string, line: string): string[] => {
   const pattern1: RegExp = new RegExp(`(?:var|const|let)\\s*(\\w+)\\s*=\\s*_interopRequireDefault\\(\\s*${functionName}[^-]*?\\s*\\)*`);
@@ -105,4 +105,4 @@ export const secfuncNameIdentifiers = (functionName: string, line: string): stri
     }
   }
   return secFuncName;
-}
+};

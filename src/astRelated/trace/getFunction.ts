@@ -195,7 +195,11 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
             const params = getParams(path.node.declaration.params);
             exportedFunctions.add(serializeFunction(name, params));
             if (!resultArray.some((func) => func.name === name)) {
-              resultArray.push({ name, isExported: true, arg: params, returnExprs: getReturnExpressionsFromFunctionNode(path.node.declaration, fileContent), filePath, start: path.node.declaration.start, end: path.node.declaration.end });
+              resultArray.push({
+                name, isExported: true, arg: params,
+                returnExprs: getReturnExpressionsFromFunctionNode(path.node.declaration, fileContent),
+                filePath, start: path.node.declaration.start, end: path.node.declaration.end,
+              });
             }
           } else if (t.isVariableDeclaration(path.node.declaration)) {
             for (const declarator of path.node.declaration.declarations) {
@@ -205,7 +209,11 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
                 const params = getParams(declarator.init.params);
                 exportedFunctions.add(serializeFunction(name, params));
                 if (!resultArray.some((func) => func.name === name)) {
-                  resultArray.push({ name, isExported: true, arg: params, returnExprs: getReturnExpressionsFromFunctionNode(declarator.init, fileContent), filePath, start: declarator.init.start, end: declarator.init.end });
+                  resultArray.push({
+                    name, isExported: true, arg: params,
+                    returnExprs: getReturnExpressionsFromFunctionNode(declarator.init, fileContent),
+                    filePath, start: declarator.init.start, end: declarator.init.end,
+                  });
                 }
               }
             }
@@ -226,7 +234,11 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
           const params = getParams(path.node.declaration.params);
           exportedFunctions.add(serializeFunction(name, params));
           if (!resultArray.some((func) => func.name === name)) {
-            resultArray.push({ name, isExported: true, arg: params, returnExprs: getReturnExpressionsFromFunctionNode(path.node.declaration, fileContent), filePath, start: path.node.declaration.start, end: path.node.declaration.end });
+            resultArray.push({
+              name, isExported: true, arg: params,
+              returnExprs: getReturnExpressionsFromFunctionNode(path.node.declaration, fileContent),
+              filePath, start: path.node.declaration.start, end: path.node.declaration.end,
+            });
           }
         } else if (t.isIdentifier(path.node.declaration)) {
           explicitlyExportedNames.add(path.node.declaration.name);
@@ -423,7 +435,11 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
             isExported = true;
           }
           if (!resultArray.some((func) => func.name === name)) {
-            resultArray.push({ name, isExported, arg: params, returnExprs: getReturnExpressionsFromFunctionNode(path.node.value, fileContent), filePath, start: path.node.value.start, end: path.node.value.end });
+            resultArray.push({
+              name, isExported, arg: params,
+              returnExprs: getReturnExpressionsFromFunctionNode(path.node.value, fileContent),
+              filePath, start: path.node.value.start, end: path.node.value.end,
+            });
           }
         }
       },

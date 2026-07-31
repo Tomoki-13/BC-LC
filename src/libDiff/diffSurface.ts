@@ -5,6 +5,7 @@ import type { ApiSurface, ApiSymbol, LossCandidate, ChangeTag, Confidence } from
 function labelOf(tag: ChangeTag): string {
   switch (tag) {
     case 'function-removed':            return 'export 関数の削除（呼び出し不可）';
+    case 'export-removed':              return '非関数 export（変数/値/メンバ）の削除（参照不可）';
     case 'module-removed':              return 'モジュールの削除';
     case 'arg-added':                   return '引数の増加（必須化なら呼び出し側で不足）';
     case 'arg-removed':                 return '引数の削除（余剰引数になる）';
@@ -110,12 +111,14 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
     // 定義=ファイル単位で対応付け（同名が複数ファイルにあっても全て評価）
     for (const a of preSyms) {
       let b = postSyms.find(s => s.filePath === a.filePath);
+      // 削除タグは種別で出し分け（関数=function-removed / 非関数 export=export-removed）
+      const removedTag: ChangeTag = a.kind === 'value' ? 'export-removed' : 'function-removed';
 
       // 1) 対応する post 定義が無い → 削除 / 移動 を定義(ファイル)単位で判定
       if (!b) {
         // 1a) 名前ごと消滅（複数ファイルにあれば各ファイル分を記録）
         if (postSyms.length === 0) {
-          once(`${a.filePath}:function-removed`, () => out.push(make(a, 'function-removed', 'structural')));
+          once(`${a.filePath}:${removedTag}`, () => out.push(make(a, removedTag, 'structural')));
           continue;
         }
         // 1b) 全ファイル移動 → deep-import 破壊。移動先を対応先にして署名比較も継続
@@ -125,7 +128,7 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
           b = postSyms[0];
         } else {
           // 1c) 名前は他ファイルに残るが この定義(ファイル)は消えた（このパスの deep import が壊れる）
-          once(`${a.filePath}:function-removed`, () => out.push(make(a, 'function-removed', 'structural',
+          once(`${a.filePath}:${removedTag}`, () => out.push(make(a, removedTag, 'structural',
             `${a.filePath} から削除（他ファイルには存在）`)));
           continue;
         }

@@ -39,6 +39,7 @@ export interface ApiSurface {
 /** 変更種別タグ */
 export type ChangeTag =
   | 'function-removed'
+  | 'export-removed'       // 非関数の公開 export（変数/値/object メンバ）の削除
   | 'module-removed'
   | 'rename'
   | 'arg-added'

@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import getAllFiles from '../utils/getAllFiles';
 import { getFunction } from '../astRelated/trace/getFunction';
+import { getExportedNames } from '../astRelated/trace/getExportedNames';
 import type { ApiSymbol, ApiSurface, ExportStyle, SymbolKind } from '../types/LibDiff';
 
 const SOURCE_EXT = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'];
@@ -27,11 +28,16 @@ async function listSourceFiles(treeDir: string): Promise<string[]> {
   return files.filter(f => SOURCE_EXT.includes(path.extname(f)));
 }
 
-/** 1 ファイルの export 関数を ApiSymbol[] へ（getFunction mode 0 が surface メタも返す） */
+/**
+ * 1 ファイルの公開 export を ApiSymbol[] へ
+ *   (1) getFunction: 関数/アロー/クラスの export（引数・返り式などの署名メタ付き）
+ *   (2) getExportedNames: 関数でない export 名（変数・値・object メンバ）を kind='value' で補完
+ *   同名は関数側を優先し，非関数名は名前の有無だけを表す最小シンボル
+ */
 async function extractExports(filePath: string, treeDir: string): Promise<ApiSymbol[]> {
-  const funcs = await getFunction(filePath, 0); // mode 0 = export 関数のみ + async/optionKeys/exportStyle/kind
   const rel = path.relative(treeDir, filePath);
-  return funcs.map(f => ({
+  const funcs = await getFunction(filePath, 0); // mode 0 = export 関数のみ + async/optionKeys/exportStyle/kind
+  const symbols: ApiSymbol[] = funcs.map(f => ({
     name: f.name,
     kind: (f.kind ?? 'function') as SymbolKind,
     exportStyle: (f.exportStyle ?? 'unknown') as ExportStyle,
@@ -42,6 +48,24 @@ async function extractExports(filePath: string, treeDir: string): Promise<ApiSym
     optionKeys: f.optionKeys ?? [],
     filePath: rel,
   } as ApiSymbol));
+
+  // 非関数 export 名を補完（getFunction が拾わなかった名前のみ value として追加）
+  const known = new Set(symbols.map(s => s.name));
+  for (const e of await getExportedNames(filePath)) {
+    if (known.has(e.name)) continue;
+    known.add(e.name);
+    symbols.push({
+      name: e.name,
+      kind: 'value',
+      exportStyle: e.exportStyle,
+      params: [],
+      returnExprs: [],
+      isAsync: false,
+      optionKeys: [],
+      filePath: rel,
+    } as ApiSymbol);
+  }
+  return symbols;
 }
 
 /** 指定ツリー（=1バージョン）の export API surface を構築 */

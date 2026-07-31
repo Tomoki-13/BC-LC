@@ -14,7 +14,7 @@ const SUPPORTED_EXTENSIONS = ['.js', '.ts', '.jsx', '.tsx'];
 export function getFileRelated(all_filePaths: string[]): OutboundFileDependencies[] {
   const relevantFiles = all_filePaths.filter((filePath) => SUPPORTED_EXTENSIONS.some((ext) => filePath.endsWith(ext)));
   const allCalledUserFunc: CallModuleAndFuncList[] = relevantFiles.flatMap((filePath) =>
-    getImportAndPath(filePath, 0) as CallModuleAndFuncList[]
+    getImportAndPath(filePath, 0) as CallModuleAndFuncList[],
   );
   return getDependRelated(allCalledUserFunc);
 }

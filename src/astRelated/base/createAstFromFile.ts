@@ -47,7 +47,7 @@ export const createAstFromContent = (fileContent: string): File | null => {
 
     return ast;
   } catch (error) {
-    console.error(`AST creation not possible:`);
+    console.error('AST creation not possible:');
     console.error(error);
     return null;
   }

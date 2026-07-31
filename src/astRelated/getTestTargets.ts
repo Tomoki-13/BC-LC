@@ -49,19 +49,19 @@ export const extractTargetFunctionsInTest = async (testFilePath: string): Promis
               
               importedFunctions.push({ 
                 funcName: importedName, 
-                sourcePath: resolvedPath 
+                sourcePath: resolvedPath, 
               });
             } else if (t.isImportDefaultSpecifier(spec)) {
               // デフォルトインポート (例: import myFunc from './myFile')
               // ※デフォルトインポートの場合、テストファイル側で任意の名前を付けられるためローカル名を取得します
               importedFunctions.push({ 
                 funcName: spec.local.name, 
-                sourcePath: resolvedPath 
+                sourcePath: resolvedPath, 
               });
             }
           });
         }
-      }
+      },
     });
 
     return {

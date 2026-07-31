@@ -106,7 +106,7 @@ async function main(): Promise<void> {
   console.log(`[collectDataset] ${config.libraryName}@${config.targetVersion}  (clients=${config.numberOfRepos})`);
   console.log(
     `[Quality] ★>=${QUALITY.minStars}, 更新<=${QUALITY.maxInactiveDays}日, ` +
-      `fork除外=${QUALITY.excludeForks}, archived除外=${QUALITY.excludeArchived}`
+      `fork除外=${QUALITY.excludeForks}, archived除外=${QUALITY.excludeArchived}`,
   );
   console.log('==================================================');
 
@@ -116,7 +116,7 @@ async function main(): Promise<void> {
     config.libraryName,
     versionList,
     config.targetVersion,
-    config.includePrerelease
+    config.includePrerelease,
   );
   console.log(`[Versions] pre=${resolved.preVersion}  post=${resolved.postVersion}`);
 
@@ -135,14 +135,14 @@ async function main(): Promise<void> {
   const fresh =
     needed > 0
       ? await searchRepositories({
-          libraryName: config.libraryName,
-          preVersion: resolved.preVersion,
-          postVersion: resolved.postVersion,
-          needed,
-          exclude: new Set(existing.map((c) => c.fullName)),
-          quality: QUALITY,
-          token,
-        })
+        libraryName: config.libraryName,
+        preVersion: resolved.preVersion,
+        postVersion: resolved.postVersion,
+        needed,
+        exclude: new Set(existing.map((c) => c.fullName)),
+        quality: QUALITY,
+        token,
+      })
       : [];
   const clients = [...existing, ...fresh];
   console.log(`[Clients] 既存 ${existing.length} + 新規 ${fresh.length} = ${clients.length} 件`);
@@ -150,7 +150,7 @@ async function main(): Promise<void> {
   fs.writeFileSync(path.join(outDir, 'client_list.json'), JSON.stringify(clients, null, 2));
   fs.writeFileSync(
     path.join(outDir, 'client_names.json'),
-    JSON.stringify(clients.map((c) => c.fullName), null, 2)
+    JSON.stringify(clients.map((c) => c.fullName), null, 2),
   );
 
   // --- 3. 採用クライアントの clone（既存で中身があるものはスキップ） ---
@@ -179,7 +179,7 @@ async function main(): Promise<void> {
       resolved.postVersion,
       PATHS.libCloneBase,
       outDir,
-      token
+      token,
     );
     if (diffResult) {
       fs.writeFileSync(path.join(outDir, 'lib_diff.json'), JSON.stringify(diffResult, null, 2));
@@ -204,8 +204,8 @@ async function main(): Promise<void> {
         generatedAt: output_json.formatDateTime(new Date()),
       },
       null,
-      2
-    )
+      2,
+    ),
   );
 
   console.log(`\n[Done] 出力: ${outDir}`);

@@ -46,7 +46,7 @@ export async function cloneClient(
   fullName: string,
   libCloneBase: string,
   token: string | undefined,
-  shallow = true
+  shallow = true,
 ): Promise<CloneClientResult> {
   const m = fullName.match(/^([^/]+)\/([^/]+)$/);
   if (!m) return { fullName, dir: '', status: 'failed' };

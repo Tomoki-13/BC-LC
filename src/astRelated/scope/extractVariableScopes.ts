@@ -25,7 +25,7 @@ export const extractVariableScopes = (
           variableScopeRanges.push({ start, end });
         }
       }
-    }
+    },
   });
 
   return variableScopeRanges;

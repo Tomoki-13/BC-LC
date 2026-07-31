@@ -26,7 +26,7 @@ export const rangeArg = (
       parsed,
       variableName,
       fileContent,
-      element
+      element,
     );
     usages.push({ code: usage, varScopeStart: element.start, varScopeEnd: element.end });
   });

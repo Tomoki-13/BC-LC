@@ -72,13 +72,13 @@ export function runCompare(): void {
   // 評価用 CSV（評価できたペア: test_result / 本手法の損失有無 / 原因）
   const evaluationHeader = 'npm_pkg,prevVersion,updatedVersion,test_result,predicted_loss,category,loss_count,tags,causes\n';
   fs.writeFileSync(path.join(outputDir, 'evaluation.csv'), evaluationHeader + evaluatedRows.map(row =>
-    [row.npm_pkg, row.prevVersion, row.updatedVersion, row.state, row.predictedLoss ? 'yes' : 'no', row.category, row.lossCount, row.tags, row.causes].map(toCsvCell).join(',')
+    [row.npm_pkg, row.prevVersion, row.updatedVersion, row.state, row.predictedLoss ? 'yes' : 'no', row.category, row.lossCount, row.tags, row.causes].map(toCsvCell).join(','),
   ).join('\n'));
 
   // 除外 CSV（評価できなかったペアと理由）
   const excludedHeader = 'npm_pkg,prevVersion,updatedVersion,test_result,reason\n';
   fs.writeFileSync(path.join(outputDir, 'excluded_pairs.csv'), excludedHeader + excludedRows.map(row =>
-    [row.npm_pkg, row.prevVersion, row.updatedVersion, row.state, row.reason].map(toCsvCell).join(',')
+    [row.npm_pkg, row.prevVersion, row.updatedVersion, row.state, row.reason].map(toCsvCell).join(','),
   ).join('\n'));
 
   // 損失タグ(=Positive と判定した理由)の分布。ペア単位・タグ重複排除（1ペアで同タグ複数でも1）
@@ -98,7 +98,7 @@ export function runCompare(): void {
   // 素の判定（後方互換）
   const detailHeader = 'npm_pkg,prevVersion,updatedVersion,groundTruthLoss,predictedLoss,lossCount,status,reason\n';
   fs.writeFileSync(path.join(outputDir, 'compare_detail.csv'), detailHeader + scored.map(row =>
-    [row.npm_pkg, row.prevVersion, row.updatedVersion, row.loss, row.predictedLoss, row.lossCount, row.status, row.reason].map(toCsvCell).join(',')
+    [row.npm_pkg, row.prevVersion, row.updatedVersion, row.loss, row.predictedLoss, row.lossCount, row.status, row.reason].map(toCsvCell).join(','),
   ).join('\n'));
 
   console.log(JSON.stringify(summary, null, 2));

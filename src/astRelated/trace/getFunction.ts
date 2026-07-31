@@ -133,10 +133,10 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
           const fullPath = pathPrefix ? `${pathPrefix}.${key}` : key;
 
           if (t.isObjectProperty(prop)) {
-            if (t.isIdentifier(prop.value)) { 
-              explicitlyExportedNames.add(prop.value.name); 
-            } else if (t.isObjectExpression(prop.value)) { 
-              extractFunctionReferences(prop.value, fullPath, isExported); 
+            if (t.isIdentifier(prop.value)) {
+              explicitlyExportedNames.add(prop.value.name);
+            } else if (t.isObjectExpression(prop.value)) {
+              extractFunctionReferences(prop.value, fullPath, isExported);
             } else if (t.isFunctionExpression(prop.value) || t.isArrowFunctionExpression(prop.value)) {
               const funcNode = prop.value;
               const internalName = (funcNode as any).id?.name;
@@ -200,7 +200,7 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
           } else if (t.isVariableDeclaration(path.node.declaration)) {
             for (const declarator of path.node.declaration.declarations) {
               if (t.isVariableDeclarator(declarator) && t.isIdentifier(declarator.id) && declarator.init &&
-                  (t.isFunctionExpression(declarator.init) || t.isArrowFunctionExpression(declarator.init))) {
+                (t.isFunctionExpression(declarator.init) || t.isArrowFunctionExpression(declarator.init))) {
                 const name = declarator.id.name;
                 const params = getParams(declarator.init.params);
                 exportedFunctions.add(serializeFunction(name, params));
@@ -263,7 +263,7 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
 
         // module.exports = { a: funcA, b: { c: funcC } } のネスト解析
         if (t.isObjectExpression(right)) {
-          const isModuleExports = 
+          const isModuleExports =
             (t.isIdentifier(left) && left.name === 'exports') ||
             (t.isMemberExpression(left) && t.isIdentifier(left.object, { name: 'module' }) && t.isIdentifier(left.property, { name: 'exports' }));
 
@@ -355,8 +355,8 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
         // <識別子>.prop = 関数/識別子（uuid.v4 = v4 のようなプロパティ公開）を収集（後段で解決）
         //   ※ exports / module.exports 系は既存処理が拾うので除外
         if (t.isMemberExpression(left) && !left.computed && t.isIdentifier(left.object)
-            && left.object.name !== 'exports' && left.object.name !== 'module'
-            && t.isIdentifier(left.property)) {
+          && left.object.name !== 'exports' && left.object.name !== 'module'
+          && t.isIdentifier(left.property)) {
           const objName = left.object.name;
           const prop = left.property.name;
           if (t.isFunctionExpression(right) || t.isArrowFunctionExpression(right)) {
@@ -373,8 +373,8 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
 
           if (t.isMemberExpression(left) && !left.computed && t.isIdentifier(left.property)) {
             const object = left.object;
-            if ((t.isIdentifier(object, { name: 'exports' })) || 
-                (t.isMemberExpression(object) && t.isIdentifier(object.object, { name: 'module' }) && t.isIdentifier(object.property, { name: 'exports' }))) {
+            if ((t.isIdentifier(object, { name: 'exports' })) ||
+              (t.isMemberExpression(object) && t.isIdentifier(object.object, { name: 'module' }) && t.isIdentifier(object.property, { name: 'exports' }))) {
               name = left.property.name;
               exportedFunctions.add(serializeFunction(name, params));
             }
@@ -426,7 +426,7 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
             resultArray.push({ name, isExported, arg: params, returnExprs: getReturnExpressionsFromFunctionNode(path.node.value, fileContent), filePath, start: path.node.value.start, end: path.node.value.end });
           }
         }
-      }
+      },
     });
 
     // プロパティ公開の解決: <exportRoot>.prop = 関数/識別子（例 uuid.v4 = v4）

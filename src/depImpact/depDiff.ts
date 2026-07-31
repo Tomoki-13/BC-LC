@@ -9,10 +9,13 @@ interface VersionMeta {
 
 const DEP_KINDS: DepChange['kind'][] = ['dependencies', 'peerDependencies'];
 
+// semver でない range（github:/file:/workspace:/npm alias 等）で throw させず null を返す
+const safeMinVersion = (range: string) => { try { return semver.minVersion(range); } catch { return null; } };
+
 /** range 変化を分類（下限 major が上がれば major-bump / それ以外は minor-patch-bump） */
 function classifyBump(preRange: string, postRange: string): 'major-bump' | 'minor-patch-bump' {
-  const preMin = semver.minVersion(preRange);
-  const postMin = semver.minVersion(postRange);
+  const preMin = safeMinVersion(preRange);
+  const postMin = safeMinVersion(postRange);
   if (preMin && postMin && postMin.major > preMin.major) return 'major-bump';
   return 'minor-patch-bump';
 }

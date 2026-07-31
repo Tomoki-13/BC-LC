@@ -52,7 +52,7 @@ export function resolvePreviousVersion(
   libraryName: string,
   allVersions: string[],
   targetVersion: string,
-  includePrerelease = false
+  includePrerelease = false,
 ): ResolvedVersions {
   const post = semver.valid(targetVersion);
   if (!post) {

@@ -51,7 +51,7 @@ export async function cloneLibVersions(
   postVersion: string,
   cloneBaseDir: string,
   diffOutDir: string,
-  token: string | undefined
+  token: string | undefined,
 ): Promise<LibDiffResult | null> {
   const safeName = libraryName.replace(/[^a-zA-Z0-9_-]/g, '_');
   const repoDir = path.resolve(process.cwd(), cloneBaseDir, safeName);
@@ -65,14 +65,14 @@ export async function cloneLibVersions(
     console.log(`  [Clone] 既存を再利用: ${repoDir}`);
   }
   // タグを最新化
-  await execAsync(`git fetch --tags --quiet`, { cwd: repoDir }).catch(() => {});
+  await execAsync('git fetch --tags --quiet', { cwd: repoDir }).catch(() => {});
 
   // 2) タグ解決
   const preTag = await resolveTag(repoDir, preVersion);
   const postTag = await resolveTag(repoDir, postVersion);
   if (!preTag || !postTag) {
     console.error(
-      `  [Error] タグを解決できません: pre=${preVersion}(${preTag}) post=${postVersion}(${postTag})`
+      `  [Error] タグを解決できません: pre=${preVersion}(${preTag}) post=${postVersion}(${postTag})`,
     );
     return null;
   }
@@ -80,7 +80,7 @@ export async function cloneLibVersions(
   // 3) 変更ファイル一覧（name-status）
   const { stdout: nameStatus } = await execAsync(
     `git diff --name-status "${preTag}" "${postTag}"`,
-    { cwd: repoDir, maxBuffer: 64 * 1024 * 1024 }
+    { cwd: repoDir, maxBuffer: 64 * 1024 * 1024 },
   );
   const changedFiles: ChangedFile[] = nameStatus
     .split('\n')
@@ -95,11 +95,11 @@ export async function cloneLibVersions(
   const diffPath = path.resolve(
     process.cwd(),
     diffOutDir,
-    `${safeName}_${preVersion}_to_${postVersion}.patch`
+    `${safeName}_${preVersion}_to_${postVersion}.patch`,
   );
   const { stdout: diff } = await execAsync(
     `git diff "${preTag}" "${postTag}" -- "*.js" "*.jsx" "*.ts" "*.tsx" "*.mjs" "*.cjs"`,
-    { cwd: repoDir, maxBuffer: 256 * 1024 * 1024 }
+    { cwd: repoDir, maxBuffer: 256 * 1024 * 1024 },
   );
   fs.writeFileSync(diffPath, diff, 'utf8');
 

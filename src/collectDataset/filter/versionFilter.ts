@@ -21,7 +21,7 @@ import semver from 'semver';
 export function usesPreviousVersion(
   range: string,
   preVersion: string,
-  postVersion: string
+  postVersion: string,
 ): boolean {
   const r = normalizeRange(range);
   if (r === null) return false;

@@ -46,7 +46,7 @@ export function runGroundTruth(): void {
   // CSV（, " 改行を含む値はクオートしてエスケープ）
   const header = 'npm_pkg,nameWithOwner,prevVersion,updatedVersion,state,loss,isBreakingByMatsuda,failCount,succCount\n';
   const rows = list.map(g =>
-    [g.npm_pkg, g.nameWithOwner, g.prevVersion, g.updatedVersion, g.state, g.loss, g.isBreakingByMatsuda, g.failCount, g.succCount].map(toCsvCell).join(',')
+    [g.npm_pkg, g.nameWithOwner, g.prevVersion, g.updatedVersion, g.state, g.loss, g.isBreakingByMatsuda, g.failCount, g.succCount].map(toCsvCell).join(','),
   ).join('\n');
   fs.writeFileSync(path.join(outDir, 'ground_truth.csv'), header + rows);
 

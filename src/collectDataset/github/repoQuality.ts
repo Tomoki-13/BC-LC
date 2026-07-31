@@ -41,7 +41,7 @@ export const DEFAULT_QUALITY: QualityCriteria = {
 /** リポジトリのメタデータを取得（失敗時 null） */
 export async function fetchRepoMeta(
   fullName: string,
-  token: string | undefined
+  token: string | undefined,
 ): Promise<RepoMeta | null> {
   try {
     const res = await fetch(`https://api.github.com/repos/${fullName}`, {
@@ -67,7 +67,7 @@ export async function fetchRepoMeta(
 /** 品質条件を満たすか判定。満たさない場合は reason に理由を返す。 */
 export function meetsQuality(
   meta: RepoMeta,
-  c: QualityCriteria
+  c: QualityCriteria,
 ): { ok: boolean; reason?: string } {
   if (c.excludeArchived && meta.archived) return { ok: false, reason: 'archived' };
   if (c.excludeForks && meta.fork) return { ok: false, reason: 'fork' };

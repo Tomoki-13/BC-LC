@@ -1,6 +1,9 @@
 import semver from 'semver';
 import type { ApiSurface, ApiSymbol, LossCandidate, ChangeTag, Confidence } from '../types/LibDiff';
 
+// semver でない range（github:/file:/workspace: 等）で throw させず null を返す
+const safeMinVersion = (range: string) => { try { return semver.minVersion(range); } catch { return null; } };
+
 /** どんな後方互換性の損失かを表すラベル（結果を見て損失内容が分かるように） */
 function labelOf(tag: ChangeTag): string {
   switch (tag) {
@@ -62,15 +65,15 @@ function normReturns(arr: string[] | undefined): string {
  */
 function raisedEngineFloor(field: 'node' | 'npm', preRange?: string, postRange?: string): string | null {
   if (!postRange) return null;                       // post に要求なし → 制約なし/緩和
-  const postMin = semver.minVersion(postRange);
-  if (!postMin) return null;                         // range として解釈不能
+  const postMin = safeMinVersion(postRange);
+  if (!postMin) return null;                         // range として解釈不能（semver でない等）
   if (!preRange) {
     // pre に要求なし → 新規に下限追加（"*"/">=0" 等の実質無制限は除外）
     return semver.gt(postMin, '0.0.0')
       ? `engines.${field}: (なし) → ${postRange}（新規に ${postMin.version} 以上を要求）`
       : null;
   }
-  const preMin = semver.minVersion(preRange);
+  const preMin = safeMinVersion(preRange);
   if (preMin && semver.gt(postMin, preMin)) {
     return `engines.${field}: ${preRange} → ${postRange}（下限 ${preMin.version} → ${postMin.version}）`;
   }
@@ -84,7 +87,7 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
   const postByName = indexByName(post);
 
   const make = (
-    sym: ApiSymbol, tag: ChangeTag, confidence: Confidence, detail?: string
+    sym: ApiSymbol, tag: ChangeTag, confidence: Confidence, detail?: string,
   ): LossCandidate => ({
     libName,
     preVersion: pre.version,

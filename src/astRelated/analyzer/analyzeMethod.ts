@@ -1,6 +1,6 @@
 import { promises as fsPromises } from 'fs';
-import traverse from "@babel/traverse";
-import * as t from "@babel/types";
+import traverse from '@babel/traverse';
+import * as t from '@babel/types';
 
 import { createAstFromFile } from '../base/createAstFromFile';
 // パスと関数名から関数使用部分を抽出　
@@ -86,4 +86,4 @@ export const analyzeMethod = async (filePath: string, funcName: string): Promise
     //console.log(error);
   }
   return resultArray;
-}
+};

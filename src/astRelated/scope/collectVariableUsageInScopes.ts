@@ -9,7 +9,7 @@ export const collectVariableUsageInScopes = (
   parsed: t.File,
   variableName: string,
   fileContent: string,
-  scopeRange?: { start: number; end: number }
+  scopeRange?: { start: number; end: number },
 ): string[] => {
   const usages: string[] = [];
   // 変数への代入履歴を取得
@@ -17,10 +17,10 @@ export const collectVariableUsageInScopes = (
     VariableDeclarator(path) {
       if (scopeRange) {
         if (typeof path.node.start === 'number' && typeof path.node.end === 'number') {
-           // ノードが指定範囲の外にある場合はスキップ
-           if (path.node.start < scopeRange.start || path.node.end > scopeRange.end) {
-             return;
-           }
+          // ノードが指定範囲の外にある場合はスキップ
+          if (path.node.start < scopeRange.start || path.node.end > scopeRange.end) {
+            return;
+          }
         }
       }
 
@@ -40,9 +40,9 @@ export const collectVariableUsageInScopes = (
     AssignmentExpression(path) {
       if (scopeRange) {
         if (typeof path.node.start === 'number' && typeof path.node.end === 'number') {
-           if (path.node.start < scopeRange.start || path.node.end > scopeRange.end) {
-             return;
-           }
+          if (path.node.start < scopeRange.start || path.node.end > scopeRange.end) {
+            return;
+          }
         }
       }
       
@@ -60,7 +60,7 @@ export const collectVariableUsageInScopes = (
           '-=': '-',
           '*=': '*',
           '/=': '/',
-          '%=': '%'
+          '%=': '%',
         };
         const expandedRhs = opMap[operator]
           ? `${variableName} ${opMap[operator]} ${rhsCode}`

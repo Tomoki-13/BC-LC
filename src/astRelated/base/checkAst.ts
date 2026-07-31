@@ -16,5 +16,5 @@ export const checkAst = async (filePath: string): Promise<boolean> => {
     return false;
   }
   return false;
-}
+};
 

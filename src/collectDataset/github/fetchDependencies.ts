@@ -21,7 +21,7 @@ export interface Dependencies {
 export async function fetchDependencies(
   fullName: string,
   pkgPath: string,
-  token: string | undefined
+  token: string | undefined,
 ): Promise<Dependencies> {
   const url = `https://api.github.com/repos/${fullName}/contents/${pkgPath}`;
   try {

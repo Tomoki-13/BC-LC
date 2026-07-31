@@ -3,7 +3,7 @@ import traverse, { NodePath } from '@babel/traverse';
 import * as t from '@babel/types';
 
 import { FunctionInfo_funcRange } from '../../types/FunctionInfo';
-import { getBasicFunctionInfo} from '../trace/getFunction';
+import { getBasicFunctionInfo } from '../trace/getFunction';
 import { rangeArg } from '../scope/rangeArg';
 import { InboundFunctionDependencies } from '../../types/FileDependencies';
 import { VariableUsage } from '../../types/VariableUsage';
@@ -301,7 +301,7 @@ async function analyzeArguments(
                 
                 finalArgTypes[index].push(...typesFromRec);
                 finalArgContexts[index].push(
-                   ...contextsFromRec.map(cleanCodeSnippet)
+                  ...contextsFromRec.map(cleanCodeSnippet),
                 );
               }
             }

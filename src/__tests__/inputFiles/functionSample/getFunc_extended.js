@@ -20,6 +20,6 @@ module.exports = {
   mathUtils: {
     divide: function(a, b) {
       return a / b;
-    }
-  }
+    },
+  },
 };

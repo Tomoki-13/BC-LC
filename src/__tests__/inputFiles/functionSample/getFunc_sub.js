@@ -1,36 +1,36 @@
-export { }
+export { };
 function add_default(a = 1, b) {
   return a + b;
 }
 
 function funcA(string) {
-  return "OK";
+  return 'OK';
 }
 
 function funcB(string) {
-  return "No";
+  return 'No';
 }
 
 function funcC(string) {
-  return "Yes";
+  return 'Yes';
 }
 
 function funcD(string) {
-  return "Out";
+  return 'Out';
 }
 
 module.exports = {
   // 識別子を直接指定
   funcA: funcA,
-    // ネストされたオブジェクト構造
-    to: {
+  // ネストされたオブジェクト構造
+  to: {
     // ネスト内での指定
     funcB: funcB,
 
     // さらに深いネスト
     utils: {
-      funcC: funcC
-    }
+      funcC: funcC,
+    },
   },
-  funcE: funcD
+  funcE: funcD,
 };

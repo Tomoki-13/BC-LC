@@ -3,8 +3,8 @@ import { File } from '@babel/types';
 
 /**
  * ソース文字列を Babel AST にする（拡張子で TS/JSX プラグインを出し分け）入力: パス+内容 / 出力: File or 失敗時 null
- *   .ts/.mts/.cts/.tsx のみ typescript プラグインを付ける。
- *   プレーン JS(.js/.mjs/.cjs) に typescript を付けると `<` を TS ジェネリックと誤解釈して parse 失敗するため付けない。
+ *   .ts/.mts/.cts/.tsx のみ typescript プラグインを付ける
+ *   プレーン JS(.js/.mjs/.cjs) に typescript を付けると `<` を TS ジェネリックと誤解釈して parse 失敗するため付けない
  */
 export const createAstFromFile = (filePath: string, fileContent: string): File | null => {
   try {

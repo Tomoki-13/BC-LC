@@ -5,7 +5,9 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "jest ./src/__tests__/"
+    "test": "jest ./src/__tests__/",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix"
   },
   "keywords": [],
   "author": "",
@@ -19,12 +21,18 @@
     "semver": "^7.6.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@types/babel__core": "^7.20.5",
     "@types/babel__traverse": "^7.28.0",
     "@types/jest": "^30.0.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^25.3.3",
     "@types/semver": "^7.5.8",
+    "@typescript-eslint/eslint-plugin": "^8.65.0",
+    "@typescript-eslint/parser": "^8.65.0",
+    "eslint": "^9.39.5",
+    "globals": "^17.8.0",
+    "jest": "^30.4.2",
     "ts-jest": "^29.4.6",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",

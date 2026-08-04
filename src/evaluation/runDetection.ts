@@ -12,12 +12,13 @@ import { diffDeps } from '../depImpact/depDiff';
 import {
   CLONE_BASE, DETECTION_DIR, AUDIT_DIR, GroundTruthPair, DetectionRecord, LossCandidate,
   toDirName, loadGroundTruth, groupByLib, fetchPackument,
+  ExcludeReason, Analyzability, classifyAnalyzability,
 } from '../utils/evalShared';
 
 // 1バージョンの surface 取得結果（reason で「なぜ評価不能か」を表す）
 interface SurfaceResult {
   surface: any | null;
-  reason: 'ok' | 'ref-unresolved' | 'build-error' | 'empty';
+  reason: 'ok' | ExcludeReason;
 }
 
 /**
@@ -35,8 +36,8 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
   console.log(`[runDetection] libs=${libNames.length} (全${pairsByLib.size}), pairs=${libNames.reduce((n, l) => n + pairsByLib.get(l)!.length, 0)}`);
 
   const records: DetectionRecord[] = [];
-  const excludedRecord = (pair: GroundTruthPair, reason: string): DetectionRecord =>
-    ({ ...pair, status: 'excluded', reason, candidates: [] });
+  const excludedRecord = (pair: GroundTruthPair, reason: string, analyzability: Analyzability): DetectionRecord =>
+    ({ ...pair, status: 'excluded', reason, analyzability, candidates: [] });
 
   let libIndex = 0;
   for (const libName of libNames) {
@@ -53,14 +54,14 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
       const repoUrl = packument ? extractRepositoryUrl(packument?.versions?.[libPairs[0].updatedVersion] ?? packument) : null;
       if (!repoUrl) {
         logger.error(libName, '-', 'clone', 'repository URL を特定できず（no-repo-url）');
-        for (const pair of libPairs) records.push(excludedRecord(pair, 'no-repo-url'));
+        for (const pair of libPairs) records.push(excludedRecord(pair, 'no-repo-url', 'external'));
         continue;
       }
       try {
         LibRepo.ensureClone(repoUrl, repoDir, process.env.GITHUB_TOKEN);
       } catch (e: any) {
         logger.error(libName, '-', 'clone', `clone 失敗: ${e?.message ?? e}`);
-        for (const pair of libPairs) records.push(excludedRecord(pair, 'clone-failed'));
+        for (const pair of libPairs) records.push(excludedRecord(pair, 'clone-failed', 'external'));
         continue;
       }
     }
@@ -106,12 +107,19 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
       const preSurface = await getSurface(pair.prevVersion);
       const postSurface = await getSurface(pair.updatedVersion);
 
-      // どちらかのバージョンが評価不能なら除外（どのバージョンが何の理由かを記録）
+      // どちらかのバージョンが評価不能なら除外（どのバージョンが何の理由か＋解析可否クラスを記録）
       if (preSurface.reason !== 'ok' || postSurface.reason !== 'ok') {
         const reasonParts: string[] = [];
-        if (preSurface.reason !== 'ok') reasonParts.push(`pre(${pair.prevVersion}):${preSurface.reason}`);
-        if (postSurface.reason !== 'ok') reasonParts.push(`post(${pair.updatedVersion}):${postSurface.reason}`);
-        records.push(excludedRecord(pair, reasonParts.join(' / ')));
+        const badReasons: ExcludeReason[] = [];
+        if (preSurface.reason !== 'ok') {
+          reasonParts.push(`pre(${pair.prevVersion}):${preSurface.reason}`);
+          badReasons.push(preSurface.reason);
+        }
+        if (postSurface.reason !== 'ok') {
+          reasonParts.push(`post(${pair.updatedVersion}):${postSurface.reason}`);
+          badReasons.push(postSurface.reason);
+        }
+        records.push(excludedRecord(pair, reasonParts.join(' / '), classifyAnalyzability(badReasons)));
         continue;
       }
 
@@ -120,7 +128,7 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
       // 依存 range 変化を signal として別枠で記録（採点は candidates のみ・depChanges は不使用）
       //TODO:実験用
       const depChanges = diffDeps(packument?.versions?.[pair.prevVersion], packument?.versions?.[pair.updatedVersion]);
-      records.push({ ...pair, status: 'evaluated', reason: 'ok', candidates, depChanges });
+      records.push({ ...pair, status: 'evaluated', reason: 'ok', analyzability: 'analyzed', candidates, depChanges });
     }
   }
   process.stderr.write('\n');

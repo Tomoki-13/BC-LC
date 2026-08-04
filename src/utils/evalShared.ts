@@ -44,14 +44,41 @@ export interface DepChange {
   change: 'added' | 'removed' | 'major-bump' | 'minor-patch-bump';
 }
 
+// 1バージョンが評価不能な理由(atom)。runDetection が版ごとに付ける
+export type ExcludeReason = 'no-repo-url' | 'clone-failed' | 'ref-unresolved' | 'build-error' | 'empty';
+
+/**
+ * 解析可否の3分類（混同行列でどう扱うかを決める唯一の基準。compare/scope はこれだけ見る）
+ *   analyzed      両版とも export を抽出でき pre/post を diff できた → 通常評価（TP/FP/FN/TN）
+ *   method-limit  コードは取れたが export が0件(empty) → 予測『損失なし』で FN/TN に計上（本手法の抽出限界）
+ *   external      リポジトリ/版が取れず解析を試みられない → 母数から除外
+ */
+export type Analyzability = 'analyzed' | 'method-limit' | 'external';
+
+// external＝解析を試みることすらできない atom（method-limit は empty のみ）
+const EXTERNAL_REASONS: ReadonlySet<ExcludeReason> = new Set(['no-repo-url', 'clone-failed', 'ref-unresolved', 'build-error']);
+
+/**
+ * 1ペアの pre/post 側の評価不能理由(ok を除いた atom 群)から解析可否クラスを決める
+ * 入力: 非ok な reason の配列 / 出力: Analyzability
+ *   external を優先する（片版でもコードが取れなければ pre-post 比較そのものが成立しない）
+ */
+export function classifyAnalyzability(reasons: ExcludeReason[]): Analyzability {
+  if (reasons.length === 0) return 'analyzed';
+  if (reasons.some(r => EXTERNAL_REASONS.has(r))) return 'external';
+  return 'method-limit'; // 残りは empty のみ
+}
+
 /**
  * 1ペアの検出事実（runDetection が全ペア分を records.json に書き、compare/analysis が読む）
  *   status='evaluated': 両バージョンの surface 抽出成功 → candidates が検出結果
  *   status='excluded' : どちらか評価不能（reason に理由）→ candidates は空
+ *   analyzability      : 混同行列での扱いを決める型付きタグ（reason の文字列解釈に依存しないため）
  */
 export interface DetectionRecord extends GroundTruthPair {
   status: 'evaluated' | 'excluded';
   reason: string;
+  analyzability: Analyzability;
   candidates: LossCandidate[];
   depChanges?: DepChange[];   // pre→post の依存 range 変化（signal・採点/FN判定には使わない）
 }
@@ -129,7 +156,7 @@ export async function buildSurfaceForVersion(repoDir: string, version: string, g
   try {
     LibRepo.checkoutVersion(repoDir, ref);
     const surface = await ApiSurface.buildApiSurface(repoDir, version, ref);
-    return surface.symbols.length > 0 ? surface : null; // 空 surface は評価対象外
+    return surface; // 空 surface もそのまま返す（採点側で empty=抽出限界を「予測=損失なし」として fold。null は外部失敗のみ）
   } catch {
     return null;
   }

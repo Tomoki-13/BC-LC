@@ -72,12 +72,16 @@ export async function runScopeCompare(maxLibs: number = Infinity): Promise<void>
     for (const pair of libPairs) {
       const pre = await getVersionData(pair.prevVersion);
       const post = await getVersionData(pair.updatedVersion);
-      if (!pre || !post) { unavailable++; continue; }
+      if (!pre || !post) { unavailable++; continue; } // 外部失敗(ref未解決/build/clone)のみ除外
       analyzable++;
+      // どちらかが空 surface = 本手法の抽出限界 → 全 mode で予測『損失なし』
+      const bothExtracted = pre.surface.symbols.length > 0 && post.surface.symbols.length > 0;
       for (const mode of MODES) {
-        const preFiltered = ApiScope.filterSurface(pre.surface, mode, usageForMode(pre, mode));
-        const postFiltered = ApiScope.filterSurface(post.surface, mode, usageForMode(post, mode));
-        const predictedLoss = DiffSurface.diffSurface(preFiltered, postFiltered, libName).length > 0;
+        const predictedLoss = bothExtracted && DiffSurface.diffSurface(
+          ApiScope.filterSurface(pre.surface, mode, usageForMode(pre, mode)),
+          ApiScope.filterSurface(post.surface, mode, usageForMode(post, mode)),
+          libName,
+        ).length > 0;
         const confusion = confusionByMode[mode];
         if (pair.loss && predictedLoss) confusion.tp++;
         else if (pair.loss && !predictedLoss) confusion.fn++;

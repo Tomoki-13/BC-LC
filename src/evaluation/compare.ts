@@ -16,25 +16,34 @@ interface ScoredPair extends DetectionRecord {
   category: '' | 'TP' | 'FP' | 'FN' | 'TN';
 }
 
-/** 検出事実(records.json)を正解と突き合わせて category を付ける。入力: DetectionRecord / 出力: ScoredPair */
+/**
+ * 検出事実(records.json)を正解と突き合わせて category を付ける。入力: DetectionRecord / 出力: ScoredPair
+ *   record.analyzability（runDetection が付けた型付きタグ）で扱いを分ける（reason 文字列は解釈しない）:
+ *     external     → 混同行列の外（category=''）
+ *     method-limit → 「予測=損失なし」で FN/TN に計上。コードは取れたのに export 0件＝手法の抽出限界
+ *     ok           → 通常評価（candidates 有無で TP/FP/FN/TN）
+ */
 function scoreRecord(record: DetectionRecord): ScoredPair {
-  if (record.status === 'excluded') {
+  if (record.analyzability === 'external') {
     return { ...record, predictedLoss: null, lossCount: 0, tags: '', causes: '', category: '' };
   }
-  const predictedLoss = record.candidates.length > 0;
+  const predictedLoss = record.candidates.length > 0; // method-limit は candidates=[] → 予測『損失なし』
   const category: ScoredPair['category'] = record.loss
     ? (predictedLoss ? 'TP' : 'FN')
     : (predictedLoss ? 'FP' : 'TN');
   const tags = [...new Set(record.candidates.map(c => c.tag))].join(';');
-  const causes = record.candidates.map(c => `${c.tag}:${c.detail}`).join(' | ');
+  const causes = record.analyzability === 'method-limit'
+    ? `method-limit:${record.reason}` // 抽出限界で空予測になった理由を残す
+    : record.candidates.map(c => `${c.tag}:${c.detail}`).join(' | ');
   return { ...record, predictedLoss, lossCount: record.candidates.length, tags, causes, category };
 }
 
 /** records.json を採点し，混同行列・指標・各CSVを eval/ に出力する（clone/surface は行わない） */
 export function runCompare(): void {
   const scored = loadRecords().map(scoreRecord);
-  const evaluatedRows = scored.filter(row => row.status === 'evaluated');
-  const excludedRows = scored.filter(row => row.status === 'excluded');
+  // 混同行列に入る = evaluated ＋ 抽出限界(empty等)fold（category が付いたもの）／外部除外は category=''
+  const evaluatedRows = scored.filter(row => row.category !== '');
+  const excludedRows = scored.filter(row => row.category === '');
 
   const confusionMatrix = { tp: 0, fp: 0, fn: 0, tn: 0 };
   for (const row of evaluatedRows) {
@@ -52,10 +61,18 @@ export function runCompare(): void {
     excludedByReason[key] = (excludedByReason[key] ?? 0) + 1;
   }
 
+  const methodLimitRows = evaluatedRows.filter(row => row.analyzability === 'method-limit');
+  const methodLimitFolded = methodLimitRows.length;
   const summary = {
     totalPairs: scored.length,
-    evaluated: evaluatedRows.length,
-    excluded: excludedRows.length,
+    matrixTotal: evaluatedRows.length,                          // 混同行列の母数（= evaluated + 抽出限界fold）
+    evaluatedNormal: evaluatedRows.length - methodLimitFolded,  // 両版の surface を抽出できたペア
+    methodLimitFolded,                                          // 抽出限界(empty)を予測『損失なし』として計上した数
+    methodLimitBreakdown: {                                     // その内訳（FN=真の見逃し扱い / TN=正解扱い）
+      fn: methodLimitRows.filter(r => r.category === 'FN').length,
+      tn: methodLimitRows.filter(r => r.category === 'TN').length,
+    },
+    externalExcluded: excludedRows.length,                      // リポジトリ無し/clone失敗/版未解決（混同行列の外）
     excludedByReason,
     groundTruth: {
       failure_loss: evaluatedRows.filter(row => row.loss).length,

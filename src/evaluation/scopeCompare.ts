@@ -9,7 +9,7 @@ import ApiScope from '../libDiff/apiScope';
 import type { ScopeMode, ApiUsage, ApiSurface } from '../types/LibDiff';
 import { extractRepositoryUrl } from '../collectDataset/npm/registry';
 import {
-  CLONE_BASE, EVAL_DIR, GroundTruthPair, toDirName,
+  CLONE_BASE, EVAL_DIR, toDirName,
   loadGroundTruth, groupByLib, fetchPackument, computeMetrics, buildSurfaceForVersion, emptyUsage,
 } from '../utils/evalShared';
 

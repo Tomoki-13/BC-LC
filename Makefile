@@ -16,7 +16,7 @@ VER   ?= 2.0.0
 COUNT ?= 5
 
 .PHONY: install collect sample run-sample run-uuid run-globby \
-        run detect compare scope tag-analysis pair-tags return-analysis dep-impact show-result help
+        run detect compare scope tag-analysis pair-tags return-analysis dep-impact show-result help run-8lib
 
 # 分析系のパイロット件数（先頭 N lib だけ。空なら全件）
 #   make scope N=5
@@ -53,6 +53,9 @@ run-uuid: ## 損失検出を uuid 3.4.0 → 7.0.0-beta.0 で実行
 
 run-globby: ## 損失検出を globby 6.1.0 → 7.0.0 で実行
 	cd $(SRCDIR) && $(TSX) index.ts --pair globby 6.1.0 7.0.0
+
+run-8lib: ## targets.json の8ライブラリで pattern 生成（R-BC形式+ラベル）→ BC-LC-8lib
+	cd $(SRCDIR) && $(TSX) 8-library.ts
 
 # ---------------------------------------------------------------
 # 評価（詳細は README.md「評価パイプライン」）

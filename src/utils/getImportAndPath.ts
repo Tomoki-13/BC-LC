@@ -44,7 +44,7 @@ const get_perFunc = (moduleList: ModuleList[]): CallModuleAndFuncList[] => {
       funcNames.forEach((funcName) => {
         result.push({ code: moduleInfo.code, call_modulename: moduleInfo.modulename, funcname: funcName, path: moduleInfo.path });
       });
-    } catch (error) {
+    } catch {
       console.log('moduleInfo.code error:', moduleInfo.code);
       console.log('get_perFunc error:', moduleInfo.modulename);
     }

@@ -2,7 +2,6 @@ import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import semver from 'semver';
-import { execSync } from 'child_process';
 
 import OutputJson from './utils/output_json';
 import ApiSurfaceExtractor from './libDiff/apiSurface';     // 差分取得: surface 抽出
@@ -284,8 +283,8 @@ async function main(): Promise<void> {
   runGroundTruth();          // 正解ラベル → eval/ground_truth.json
   await runDetection();      // 事実生成（重いパス）→ detection/records.json
   runCompare();              // 採点 → eval/compare_summary.json 他
-  runTagAnalysis();          // 分析 → analysis/tagAnalysis/
-  runPairTags();             // 分析 → analysis/pairTags/
+  // runTagAnalysis();          // 分析 → analysis/tagAnalysis/
+  // runPairTags();             // 分析 → analysis/pairTags/
   runReturnAnalysis();       // 分析 → analysis/returnAnalysis/
   await runScopeCompare();   // 比較 → eval/scope_compare.json（surface を別途作り直す重いパス）
   archiveEvalToHistory();    // ★latest を history/eval/<RUN_ID> に必ず退避（日時付きで履歴を残す）

@@ -25,7 +25,6 @@ function labelOf(tag: ChangeTag): string {
     case 'deep-import-broken':          return '内部パス移動（deep import 破壊）';
     case 'node-npm-requirement-raised': return 'node/npm の必要バージョン引き上げ（engines・それ未満の利用者が install/実行不可）';
     case 'dependency-changed':          return '依存の変更';
-    case 'rename':                      return 'リネーム';
     default:                            return String(tag);
   }
 }

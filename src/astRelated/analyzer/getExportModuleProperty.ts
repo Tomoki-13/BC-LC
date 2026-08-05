@@ -4,7 +4,6 @@ import traverse, { NodePath } from '@babel/traverse';
 import * as t from '@babel/types';
 
 import { ModuleExportProperty } from '../../types/FunctionInfo';
-// TODO: 組み込みがまだ module.id.exports が判定できるように組み込む
 
 /**
  * 指定されたノードが 'module.exports.someIdentifier' の形式か判定する関数

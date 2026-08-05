@@ -36,27 +36,43 @@ export interface ApiSurface {
 
 // ---- 損失候補（差分結果。L2 で生成） ----
 
-/** 変更種別タグ */
+/**
+ * 変更種別タグ（後方互換性の損失カタログ）
+ *   全タグは記録として candidates に残すが、実際に損失として数えるのは LOSS_TAGS のみ
+ *   （rename は旧名の消失として function-removed/export-removed に含まれるため独立タグは持たない）
+ */
 export type ChangeTag =
-  | 'function-removed'
-  | 'export-removed'       // 非関数の公開 export（変数/値/object メンバ）の削除
-  | 'module-removed'
-  | 'rename'
-  | 'arg-added'
-  | 'arg-removed'
-  | 'arg-reordered'
-  | 'arg-type-changed'
-  | 'option-removed'       // options オブジェクトの受理キーが消えた（クライアントの指定が無視される）
-  | 'option-added'         // options キー追加（加算的・参考）
-  | 'return-changed'
-  | 'spec-changed'
-  | 'new-required'         // 関数 → class（new 必須化）等
-  | 'sync-to-async'
-  | 'export-style-changed' // cjs/esm・named/default の変化
-  | 'module-format-changed'
-  | 'deep-import-broken'
-  | 'node-npm-requirement-raised'
-  | 'dependency-changed';
+  // --- 損失として扱う（LOSS_TAGS）---
+  | 'function-removed'       // export 関数の削除（呼び出し不可）
+  | 'export-removed'         // 非関数 export（変数/値/object メンバ）の削除（参照不可）
+  | 'module-removed'         // モジュール(サブパス)の削除
+  | 'deep-import-broken'     // 内部パス移動で deep import が壊れる
+  | 'arg-reordered'          // 引数の並び替え（位置がずれる＝破壊的）
+  | 'arg-removed'            // 引数の削除（中間の引数が消えると後続の位置引数がずれて破壊的）
+  | 'sync-to-async'          // 同期→非同期（await 要否が変わる）
+  | 'new-required'           // new 必須化/禁止化（関数 → class 等）
+  | 'module-format-changed'  // CJS/ESM の変更
+  | 'option-removed'         // options キーの削除（クライアントの指定が無視される）
+  | 'export-style-changed'   // 公開形/accessPath の変化（cjs/esm・named/default・プロパティ経由）
+  | 'return-changed'         // 返り値・仕様の変更（同一シグネチャ）
+  | 'node-npm-requirement-raised' // engines 引き上げ（それ未満の利用者が install/実行不可）
+  // --- 記録のみ（損失と言い切れないため LOSS_TAGS から除外）---
+  | 'option-added'           // options キー追加＝加算的で非破壊。損失ではないが記録として保持
+  | 'arg-added'              // 引数の増加。TODO: 追加引数が必須のときだけ破壊だが、現状 必須/任意 の判別が難しく損失に数えない
+  | 'arg-type-changed'       // 引数の型変更。TODO: R-BC 同様の型分析で兆候は見られそうだが誤検出が多そうなため今後
+  | 'spec-changed'           // 仕様変更（曖昧・意味的な受け皿）
+  | 'dependency-changed';    // 依存の変更。TODO: 未導入。間接依存の影響で損失につながる場合もある（間接依存 Phase）
+
+/**
+ * 実際に後方互換性の損失として扱うタグ（core の損失判定 judgeLoss とパターン生成 generatePatterns はこれで絞る）
+ *   ここに無いタグ（option-added / arg-added / arg-type-changed / spec-changed / dependency-changed）は
+ *   candidates に記録として残すが、損失には数えずパターンも作らない
+ */
+export const LOSS_TAGS: ReadonlySet<ChangeTag> = new Set<ChangeTag>([
+  'function-removed', 'export-removed', 'module-removed', 'deep-import-broken',
+  'arg-reordered', 'arg-removed', 'sync-to-async', 'new-required', 'module-format-changed',
+  'option-removed', 'export-style-changed', 'return-changed', 'node-npm-requirement-raised',
+]);
 
 /** 静的検出の確信度 */
 export type Confidence =

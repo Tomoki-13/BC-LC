@@ -1,4 +1,4 @@
-import type { ConverterInput, GeneratedPattern } from '../patternTypes';
+import type { ConverterInput, GeneratedPattern } from '../../types/patternTypes';
 import {
   objectBindings, namedBindings, namedAliasBindings,
   memberCall, namedCall, directCall, newCall, interopDefaultCall,

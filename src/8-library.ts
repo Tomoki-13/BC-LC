@@ -8,7 +8,7 @@ import LibRepo from './libDiff/libRepo';
 import { extractRepositoryUrl } from './collectDataset/npm/registry';
 import { CLONE_BASE, toDirName, fetchPackument, buildSurfaceForVersion } from './utils/evalShared';
 import { generatePatterns } from './patternGen/generatePatterns';
-import type { GeneratedPattern } from './patternGen/patternTypes';
+import type { GeneratedPattern } from './types/patternTypes';
 
 // 8 ライブラリ（version ペア）だけで pattern 生成を回して目視できるようにする実行スクリプト
 //   入力: ../../datasets/targets.json / clonedata/lib_versions/<lib>（既存クローンを使う）

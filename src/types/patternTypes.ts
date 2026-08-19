@@ -29,8 +29,20 @@ export interface ConverterInput {
   postSymbol?: ApiSymbol;
 }
 
-/** 
- * 1タグ → 生成パターン群（import 形ごとに複数返る。該当しなければ空配列） 
+/**
+ * 1タグ → 生成パターン群（import 形ごとに複数返る。該当しなければ空配列）
  * それぞれの処理の担当に渡す前の処理
  */
 export type TagConverter = (input: ConverterInput) => GeneratedPattern[];
+
+/** パターンが1件も出なかった候補 */
+export interface SkippedCandidate {
+  tag: string;
+  symbol: string;
+}
+
+/** generatePatterns の出力（生成パターンと、パターン化しなかった候補） */
+export interface GenerateResult {
+  patterns: GeneratedPattern[];
+  skipped: SkippedCandidate[];
+}

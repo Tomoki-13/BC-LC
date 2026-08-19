@@ -22,6 +22,16 @@ function readEngines(treeDir: string): { node?: string; npm?: string } | undefin
   }
 }
 
+/** package.json の type を読む．入力: repo/版ツリー / 出力: 'module'（ESM）/ 'commonjs'（無指定含む既定） */
+function readModuleType(treeDir: string): 'module' | 'commonjs' {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(treeDir, 'package.json'), 'utf-8'));
+    return pkg?.type === 'module' ? 'module' : 'commonjs';
+  } catch {
+    return 'commonjs';
+  }
+}
+
 /** ツリー配下の解析対象ソースを列挙（除外方針は getAllFiles に準拠） */
 async function listSourceFiles(treeDir: string): Promise<string[]> {
   const files = await getAllFiles(treeDir);
@@ -74,7 +84,7 @@ async function buildApiSurface(treeDir: string, version: string, tag: string): P
   for (const f of await listSourceFiles(treeDir)) {
     symbols.push(...await extractExports(f, treeDir));
   }
-  return { version, tag, scope: 'export', symbols, engines: readEngines(treeDir) };
+  return { version, tag, scope: 'export', symbols, engines: readEngines(treeDir), moduleType: readModuleType(treeDir) };
 }
 
 export default {

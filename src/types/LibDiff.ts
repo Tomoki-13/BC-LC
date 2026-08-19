@@ -32,6 +32,7 @@ export interface ApiSurface {
   scope: 'export' | 'all'; // 選択肢A=export / 選択肢C=全 top-level
   symbols: ApiSymbol[];
   engines?: { node?: string; npm?: string }; // package.json engines（必要ランタイム版・range 文字列）
+  moduleType?: 'module' | 'commonjs';        // package.json type（module=ESM / 無指定は commonjs）
 }
 
 // ---- 損失候補（差分結果。L2 で生成） ----

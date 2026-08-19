@@ -1,18 +1,7 @@
 import type { ApiSurface, ApiSymbol, LossCandidate } from '../types/LibDiff';
 import { LOSS_TAGS } from '../types/LibDiff';
-import type { GeneratedPattern } from '../types/patternTypes';
+import type { GeneratedPattern, GenerateResult, SkippedCandidate } from '../types/patternTypes';
 import { CONVERTERS } from './registry';
-
-/** パターンが1件も出なかった候補 */
-export interface SkippedCandidate {
-  tag: string;
-  symbol: string;
-}
-
-export interface GenerateResult {
-  patterns: GeneratedPattern[];
-  skipped: SkippedCandidate[];
-}
 
 /** 候補の symbol 名(+filePath)に対応する pre 側 ApiSymbol を引く。無ければ候補情報から最小シンボルを作る */
 function resolveSymbol(candidate: LossCandidate, surface: ApiSurface | undefined): ApiSymbol {

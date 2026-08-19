@@ -6,7 +6,8 @@ import type { ExtractFunctionCallsResult } from '../types/ExtractFunctionCallsRe
 const QUOTE = "[\"'`]";        // ' " ` を等価に扱う（import 記法の寛容化）
 const CHAIN_GUARD = '[^.]*$';  // 後続の .method チェーンを許さない（R-BC checkDot 準拠）
 
-/** 正規表現メタ文字をエスケープ（ライブラリ名・シンボル名の埋め込み用）入力: 生文字列 / 出力: エスケープ済み */
+/** 正規表現メタ文字をエスケープ（ライブラリ名・シンボル名の埋め込み用）。入力: 生文字列 / 出力: エスケープ済み */
+// 例: "my-lib.js" -> "my\\-lib\\.js"
 export function escapeLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -30,9 +31,9 @@ export function objectBindings(libName: string): BindingPart[] {
   const lib = escapeLiteral(libName);
   const bound = '(?<variable1>[\\w-]+)';
   return [
-    { form: 'cjs-require',   call: makeCall(`${bound} = require(${QUOTE}${lib}${QUOTE})${CHAIN_GUARD}`) },
-    { form: 'esm-default',   call: makeCall(`import ${bound} from ${QUOTE}${lib}${QUOTE}${CHAIN_GUARD}`) },
-    { form: 'esm-namespace', call: makeCall(`import \\* as ${bound} from ${QUOTE}${lib}${QUOTE}${CHAIN_GUARD}`) },
+    { form: 'cjs-require',   call: makeCall(`${bound} = require(${QUOTE}${lib}${QUOTE})${CHAIN_GUARD}`) },   // 例: const v1 = require('lib')
+    { form: 'esm-default',   call: makeCall(`import ${bound} from ${QUOTE}${lib}${QUOTE}${CHAIN_GUARD}`) },   // 例: import v1 from 'lib'
+    { form: 'esm-namespace', call: makeCall(`import \\* as ${bound} from ${QUOTE}${lib}${QUOTE}${CHAIN_GUARD}`) }, // 例: import * as v1 from 'lib'
   ];
 }
 
@@ -44,8 +45,8 @@ export function namedBindings(libName: string, name: string): BindingPart[] {
   const lib = escapeLiteral(libName);
   const target = escapeLiteral(name);
   return [
-    { form: 'esm-named',       call: makeCall(`import \\{[^}]*\\b${target}\\b[^}]*\\} from ${QUOTE}${lib}${QUOTE}${CHAIN_GUARD}`) },
-    { form: 'cjs-destructure', call: makeCall(`\\{[^}]*\\b${target}\\b[^}]*\\} = require(${QUOTE}${lib}${QUOTE})${CHAIN_GUARD}`) },
+    { form: 'esm-named',       call: makeCall(`import \\{[^}]*\\b${target}\\b[^}]*\\} from ${QUOTE}${lib}${QUOTE}${CHAIN_GUARD}`) }, // 例: import { name } from 'lib'
+    { form: 'cjs-destructure', call: makeCall(`\\{[^}]*\\b${target}\\b[^}]*\\} = require(${QUOTE}${lib}${QUOTE})${CHAIN_GUARD}`) }, // 例: const { name } = require('lib')
   ];
 }
 
@@ -57,11 +58,11 @@ export function subpathBindings(libName: string, subpath: string): BindingPart[]
   const spec = escapeLiteral(`${libName}/${subpath}`);
   const bound = '(?<variable1>[\\w-]+)';
   return [
-    { form: 'cjs-require-subpath',   call: makeCall(`${bound} = require(${QUOTE}${spec}${QUOTE})${CHAIN_GUARD}`) },
-    { form: 'esm-default-subpath',   call: makeCall(`import ${bound} from ${QUOTE}${spec}${QUOTE}${CHAIN_GUARD}`) },
-    { form: 'esm-named-subpath',     call: makeCall(`import \\{[^}]*\\} from ${QUOTE}${spec}${QUOTE}${CHAIN_GUARD}`) },
-    { form: 'esm-namespace-subpath', call: makeCall(`import \\* as ${bound} from ${QUOTE}${spec}${QUOTE}${CHAIN_GUARD}`) },
-    { form: 'esm-bare-subpath',      call: makeCall(`import ${QUOTE}${spec}${QUOTE}${CHAIN_GUARD}`) },
+    { form: 'cjs-require-subpath',   call: makeCall(`${bound} = require(${QUOTE}${spec}${QUOTE})${CHAIN_GUARD}`) },   // 例: const v1 = require('lib/sub')
+    { form: 'esm-default-subpath',   call: makeCall(`import ${bound} from ${QUOTE}${spec}${QUOTE}${CHAIN_GUARD}`) },   // 例: import v1 from 'lib/sub'
+    { form: 'esm-named-subpath',     call: makeCall(`import \\{[^}]*\\} from ${QUOTE}${spec}${QUOTE}${CHAIN_GUARD}`) }, // 例: import { foo } from 'lib/sub'
+    { form: 'esm-namespace-subpath', call: makeCall(`import \\* as ${bound} from ${QUOTE}${spec}${QUOTE}${CHAIN_GUARD}`) }, // 例: import * as v1 from 'lib/sub'
+    { form: 'esm-bare-subpath',      call: makeCall(`import ${QUOTE}${spec}${QUOTE}${CHAIN_GUARD}`) },                 // 例: import 'lib/sub'
   ];
 }
 
@@ -77,47 +78,55 @@ export function namedAliasBindings(libName: string, name: string): BindingPart[]
   const target = escapeLiteral(name);
   const bound = '(?<variable1>[\\w-]+)';
   return [
-    { form: 'esm-named-alias',       call: makeCall(`import \\{[^}]*\\b${target}\\s+as\\s+${bound}[^}]*\\} from ${QUOTE}${lib}${QUOTE}${CHAIN_GUARD}`) },
-    { form: 'cjs-destructure-alias', call: makeCall(`\\{[^}]*\\b${target}\\s*:\\s*${bound}[^}]*\\} = require(${QUOTE}${lib}${QUOTE})${CHAIN_GUARD}`) },
+    { form: 'esm-named-alias',       call: makeCall(`import \\{[^}]*\\b${target}\\s+as\\s+${bound}[^}]*\\} from ${QUOTE}${lib}${QUOTE}${CHAIN_GUARD}`) }, // 例: import { name as v1 } from 'lib'
+    { form: 'cjs-destructure-alias', call: makeCall(`\\{[^}]*\\b${target}\\s*:\\s*${bound}[^}]*\\} = require(${QUOTE}${lib}${QUOTE})${CHAIN_GUARD}`) }, // 例: const { name: v1 } = require('lib')
   ];
 }
 
 /** variable1 のメンバ name を参照する使用（呼び出しに限らない＝削除された関数/値の参照検出）。入力: name / 出力: usage 要素 */
+// 例: v1.name
 export function memberReference(name: string): ExtractFunctionCallsResult {
   return makeCall(`\\bvariable1\\.${escapeLiteral(name)}\\b`);
 }
 
 /** 捕捉した変数(variable1)そのものを参照（default 束縛の usage）。出力: usage 要素 */
+// 例: v1
 export function capturedReference(): ExtractFunctionCallsResult {
   return makeCall('\\bvariable1\\b');
 }
 
 /** transpile 後の default 相互運用の参照: variable1.default。出力: usage 要素 */
+// 例: v1.default
 export function interopDefaultReference(): ExtractFunctionCallsResult {
   return makeCall('\\bvariable1\\.default\\b');
 }
 
 /** 束縛を直接呼ぶ使用（default export が関数そのもの）: variable1(...)。出力: usage 要素 */
+// 例: v1(arg)
 export function directCall(): ExtractFunctionCallsResult {
   return makeCall(`\\bvariable1${CALL_TAIL}`);
 }
 
 /** new で呼ぶ使用（default export がクラス）: new variable1(...)。出力: usage 要素 */
+// 例: new v1(arg)
 export function newCall(): ExtractFunctionCallsResult {
   return makeCall(`new variable1${CALL_TAIL}`);
 }
 
 /** transpile 後の default 相互運用の呼び出し: variable1.default(...)。出力: usage 要素 */
+// 例: v1.default(arg)
 export function interopDefaultCall(): ExtractFunctionCallsResult {
   return makeCall(`\\bvariable1\\.default${CALL_TAIL}`);
 }
 
 /** variable1 のメンバ method を呼ぶ使用: variable1.method(...)。入力: method / 出力: usage 要素 */
+// 例: v1.method(arg)
 export function memberCall(method: string): ExtractFunctionCallsResult {
   return makeCall(`\\bvariable1\\.${escapeLiteral(method)}${CALL_TAIL}`);
 }
 
 /** 名前 name を直接呼ぶ使用: name(...)（named import 由来）。入力: name / 出力: usage 要素 */
+// 例: name(arg)
 export function namedCall(name: string): ExtractFunctionCallsResult {
   return makeCall(`\\b${escapeLiteral(name)}${CALL_TAIL}`);
 }

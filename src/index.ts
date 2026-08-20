@@ -8,7 +8,7 @@ import ApiSurfaceExtractor from './libDiff/apiSurface';     // 差分取得: sur
 import DiffSurface from './libDiff/diffSurface';            // 差分取得: pre/post 比較
 import LibRepo from './libDiff/libRepo';                    // 差分取得: git 操作
 import JudgeLoss from './core/judgeLoss';                   // 機能1: 損失判定
-import GeneratePattern from './core/generatePattern';       // 機能2: パターン化
+import { generatePatterns } from './patternGen/generatePatterns'; // 機能2: 損失候補 → R-BC 形式パターン
 import { fetchVersionList, fetchVersionMeta, extractRepositoryUrl } from './collectDataset/npm/registry';
 import { runGroundTruth } from './evaluation/groundTruth';   // 正解ラベル生成
 import { runDetection } from './evaluation/runDetection';    // 事実生成: 全ペア検出 → records.json
@@ -69,7 +69,7 @@ function archiveEvalToHistory(): void {
   const latest = path.resolve(process.cwd(), PATHS.evalLatestBase);
   const history = path.resolve(process.cwd(), PATHS.evalHistoryBase);
   fs.mkdirSync(history, { recursive: true });
-  for (const sub of ['detection', 'eval', 'analysis', 'audit']) {
+  for (const sub of ['library-detect', 'patterns', 'eval', 'analysis', 'audit']) {
     const src = path.join(latest, sub);
     if (fs.existsSync(src)) fs.cpSync(src, path.join(history, sub), { recursive: true });
   }
@@ -150,9 +150,8 @@ function diffPairs(libraryName: string, safeName: string, versions: string[]): v
     OutputJson.createOutputDirectory(path.dirname(lossOut));
     fs.writeFileSync(lossOut, JSON.stringify(losses, null, 2));
 
-    // 機能2: 損失をパターン化（あれば出力）
-    //TODO:未実装で箱だけ用意
-    const patterns = GeneratePattern.generate(losses);
+    // 機能2: 損失候補を R-BC 形式の検出パターンに変換（LOSS_TAGS 絞り込みは generatePatterns 内）
+    const { patterns } = generatePatterns(changes, preSurface, postSurface);
     if (patterns.length > 0) {
       const patOut = patternPath(safeName, cleanVersion(pre), cleanVersion(post));
       OutputJson.createOutputDirectory(path.dirname(patOut));
@@ -232,12 +231,13 @@ async function runPair(lib: string, pre: string, post: string): Promise<void> {
   }
 
   // 差分取得 → 機能1(判定) → 機能2(パターン化)
-  const losses = JudgeLoss.judge(DiffSurface.diffSurface(preSurface, postSurface, lib));
+  const changes = DiffSurface.diffSurface(preSurface, postSurface, lib);
+  const losses = JudgeLoss.judge(changes);
   const out = pairPath(safeName, cleanVersion(pre), cleanVersion(post));
   OutputJson.createOutputDirectory(path.dirname(out));
   fs.writeFileSync(out, JSON.stringify(losses, null, 2));
 
-  const patterns = GeneratePattern.generate(losses);
+  const { patterns } = generatePatterns(changes, preSurface, postSurface);
   if (patterns.length > 0) {
     const po = patternPath(safeName, cleanVersion(pre), cleanVersion(post));
     OutputJson.createOutputDirectory(path.dirname(po));

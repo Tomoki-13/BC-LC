@@ -4,16 +4,18 @@ import OutputJson from './output_json';
 import ApiSurface from '../libDiff/apiSurface';
 import LibRepo from '../libDiff/libRepo';
 import type { ApiSurface as ApiSurfaceType, ApiUsage } from '../types/LibDiff';
+import type { GeneratedPattern } from '../types/patternTypes';
 
 // eval 系スクリプトが共有する入出力パス（process.cwd() = BC-LC/src 基準）
 export const CLONE_BASE = '../../clonedata/lib_versions';
 const OUTPUT_BASE = '../../outputs/latest/BC-LC';
-export const DETECTION_DIR = `${OUTPUT_BASE}/detection`; // 損失有無の事実（検出の生データ）
+export const LIBRARY_DETECT_DIR = `${OUTPUT_BASE}/library-detect`; // ライブラリ側の損失有無検出（client-detect と対）
+export const PATTERNS_DIR = `${OUTPUT_BASE}/patterns`; // 損失候補 → R-BC 形式の検出パターン（client-detect の照合入力）
 export const EVAL_DIR = `${OUTPUT_BASE}/eval`;           // 採点結果（混同行列・指標）
 export const ANALYSIS_DIR = `${OUTPUT_BASE}/analysis`;   // 特徴量精査ツール（tool名ごと）
 export const AUDIT_DIR = `${OUTPUT_BASE}/audit`;         // 実行監査ログ
 export const GROUND_TRUTH_PATH = `${EVAL_DIR}/ground_truth.json`;
-export const RECORDS_PATH = `${DETECTION_DIR}/records.json`; // runDetection の出力＝採点/分析の共通入力
+export const RECORDS_PATH = `${LIBRARY_DETECT_DIR}/records.json`; // runDetection の出力＝採点/分析の共通入力
 
 // 一時的なサンプル調査の出力（本線 BC-LC と分離。latest 更新＋history にアーカイブ）
 const SAMPLE_LATEST = '../../outputs/latest/BC-sample';
@@ -81,6 +83,19 @@ export interface DetectionRecord extends GroundTruthPair {
   analyzability: Analyzability;
   candidates: LossCandidate[];
   depChanges?: DepChange[];   // pre→post の依存 range 変化（signal・採点/FN判定には使わない）
+}
+
+/**
+ * 1ペアの生成パターン（runDetection が全ペア分を patterns.json に書く。client-detect の照合入力）
+ *   patterns    : LOSS_TAGS の候補を R-BC 形式に変換したもの（0件＝損失候補なし or 全て skip）
+ *   skippedTags : パターン化しなかった候補のタグ（converter が空を返した＝node-npm 等）
+ */
+export interface PatternRecord {
+  npm_pkg: string;
+  prevVersion: string;
+  updatedVersion: string;
+  patterns: GeneratedPattern[];
+  skippedTags: string[];
 }
 
 /** records.json を読み込む。入力: なし / 出力: 検出事実の配列（無ければエラー終了） */

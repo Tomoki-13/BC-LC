@@ -9,9 +9,10 @@ import LibRepo from '../libDiff/libRepo';
 import RunLogger from '../utils/runLogger';
 import { extractRepositoryUrl } from '../collectDataset/npm/registry';
 import { diffDeps } from '../depImpact/depDiff';
+import { generatePatterns } from '../patternGen/generatePatterns';
 import {
-  CLONE_BASE, DETECTION_DIR, AUDIT_DIR, GroundTruthPair, DetectionRecord, LossCandidate,
-  toDirName, loadGroundTruth, groupByLib, fetchPackument,
+  CLONE_BASE, LIBRARY_DETECT_DIR, PATTERNS_DIR, AUDIT_DIR, GroundTruthPair, DetectionRecord, LossCandidate,
+  PatternRecord, toDirName, loadGroundTruth, groupByLib, fetchPackument,
   ExcludeReason, Analyzability, classifyAnalyzability,
 } from '../utils/evalShared';
 
@@ -25,7 +26,9 @@ interface SurfaceResult {
  * ground_truth 全ペアに P2 検出（clone→surface→diff）を1回だけ実行し，
  * 損失候補を records.json に書き出す。採点(compare)/分析(analysis)はこの出力を読むだけ
  *   入力: maxLibs（先頭N libのパイロット用。既定=全件）
- *   出力: detection/records.json（DetectionRecord 配列）＋ audit/ に解決ログ
+ *   出力: library-detect/records.json（DetectionRecord 配列＝損失有無）
+ *        patterns/patterns.json（PatternRecord 配列＝R-BC 形式の検出パターン。client-detect の照合入力）
+ *        audit/ に解決ログ
  */
 export async function runDetection(maxLibs: number = Infinity): Promise<void> {
   const logger = new RunLogger(); // バージョン解決手段・警告・エラーを監査ファイルに残す
@@ -36,6 +39,7 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
   console.log(`[runDetection] libs=${libNames.length} (全${pairsByLib.size}), pairs=${libNames.reduce((n, l) => n + pairsByLib.get(l)!.length, 0)}`);
 
   const records: DetectionRecord[] = [];
+  const patternRecords: PatternRecord[] = []; // 損失候補 → R-BC 形式パターン（evaluated ペアのみ）
   const excludedRecord = (pair: GroundTruthPair, reason: string, analyzability: Analyzability): DetectionRecord =>
     ({ ...pair, status: 'excluded', reason, analyzability, candidates: [] });
 
@@ -123,8 +127,13 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
         continue;
       }
 
-      const candidates: LossCandidate[] = DiffSurface.diffSurface(preSurface.surface, postSurface.surface, libName)
+      // diffSurface のフル候補（symbol/filePath/label を含む）を1回だけ取り，records と pattern 生成で共用
+      const fullCandidates = DiffSurface.diffSurface(preSurface.surface, postSurface.surface, libName);
+      const candidates: LossCandidate[] = fullCandidates
         .map((c: any) => ({ tag: c.tag, detail: c.detail ?? c.label ?? '', confidence: c.confidence ?? '' }));
+      // 損失候補 → R-BC 形式の検出パターン（LOSS_TAGS の絞り込みは generatePatterns 内）
+      const { patterns, skipped } = generatePatterns(fullCandidates, preSurface.surface, postSurface.surface);
+      patternRecords.push({ npm_pkg: pair.npm_pkg, prevVersion: pair.prevVersion, updatedVersion: pair.updatedVersion, patterns, skippedTags: skipped.map(s => s.tag) });
       // 依存 range 変化を signal として別枠で記録（採点は candidates のみ・depChanges は不使用）
       //TODO:実験用
       const depChanges = diffDeps(packument?.versions?.[pair.prevVersion], packument?.versions?.[pair.updatedVersion]);
@@ -133,13 +142,19 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
   }
   process.stderr.write('\n');
 
-  const outputDir = path.resolve(process.cwd(), DETECTION_DIR);
+  const outputDir = path.resolve(process.cwd(), LIBRARY_DETECT_DIR);
   OutputJson.createOutputDirectory(outputDir);
   fs.writeFileSync(path.join(outputDir, 'records.json'), JSON.stringify(records, null, 2));
 
+  const patternsDir = path.resolve(process.cwd(), PATTERNS_DIR);
+  OutputJson.createOutputDirectory(patternsDir);
+  fs.writeFileSync(path.join(patternsDir, 'patterns.json'), JSON.stringify(patternRecords, null, 2));
+
   logger.flush(path.resolve(process.cwd(), AUDIT_DIR), 'runDetection'); // 監査ログは audit/ へ
   const evaluated = records.filter(r => r.status === 'evaluated').length;
+  const totalPatterns = patternRecords.reduce((n, r) => n + r.patterns.length, 0);
   console.log(`[Done] records=${records.length} (evaluated=${evaluated}, excluded=${records.length - evaluated}) → ${outputDir}/records.json`);
+  console.log(`[Done] patterns=${totalPatterns} (pairs=${patternRecords.length}) → ${patternsDir}/patterns.json`);
 }
 
 // CLI 直接実行時のみ走らせる（import 時は走らせない）

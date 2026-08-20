@@ -8,10 +8,15 @@ import { convertArgReordered } from './converters/argReordered';
 import { convertArgRemoved } from './converters/argRemoved';
 import { convertSyncToAsync } from './converters/syncToAsync';
 import { convertReturnChanged } from './converters/returnChanged';
+import { convertNewRequired } from './converters/newRequired';
+import { convertExportStyleChanged } from './converters/exportStyleChanged';
+import { convertOptionRemoved } from './converters/optionRemoved';
+import { convertModuleFormatChanged } from './converters/moduleFormatChanged';
+import { convertNodeNpmRequirementRaised } from './converters/nodeNpmRequirementRaised';
 
 /**
- * ChangeTag → パターン変換器の対応表（検証済みタグのみ登録）
- *   未登録のタグは generatePatterns 側で「パターン無し」として skipped に回す
+ * ChangeTag → パターン変換器の対応表（LOSS_TAGS を全て登録）
+ *   非損失タグ（arg-added / option-added 等）は generatePatterns 側で LOSS_TAGS フィルタにより到達しない
  */
 export const CONVERTERS: Partial<Record<ChangeTag, TagConverter>> = {
   'function-removed': convertFunctionRemoved,
@@ -22,4 +27,9 @@ export const CONVERTERS: Partial<Record<ChangeTag, TagConverter>> = {
   'arg-removed': convertArgRemoved,
   'sync-to-async': convertSyncToAsync,
   'return-changed': convertReturnChanged,
+  'new-required': convertNewRequired,
+  'export-style-changed': convertExportStyleChanged,
+  'option-removed': convertOptionRemoved,
+  'module-format-changed': convertModuleFormatChanged,
+  'node-npm-requirement-raised': convertNodeNpmRequirementRaised,
 };

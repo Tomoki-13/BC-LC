@@ -130,3 +130,16 @@ export function memberCall(method: string): ExtractFunctionCallsResult {
 export function namedCall(name: string): ExtractFunctionCallsResult {
   return makeCall(`\\b${escapeLiteral(name)}${CALL_TAIL}`);
 }
+
+// 呼び出し引数の中に特定キーが現れる（option-removed 用）。ARGS 内に \bkey\b を要求
+const callWithKey = (key: string): string => `([^)]*\\b${escapeLiteral(key)}\\b[^)]*)${CHAIN_GUARD}`;
+
+/** variable1.method(... key ...) の呼び出し（削除された option キーを渡すクライアント検出）。入力: method / key */
+export function memberUsageWithKey(method: string, key: string): ExtractFunctionCallsResult {
+  return makeCall(`\\bvariable1\\.${escapeLiteral(method)}${callWithKey(key)}`);
+}
+
+/** name(... key ...) の直呼び出し（named import 由来 + 削除された option キー）。入力: name / key */
+export function directUsageWithKey(name: string, key: string): ExtractFunctionCallsResult {
+  return makeCall(`\\b${escapeLiteral(name)}${callWithKey(key)}`);
+}

@@ -1,7 +1,7 @@
 import type { TagConverter } from '../../types/patternTypes';
 import { usageCallPatterns, firstArgDivergence } from './shared';
 
-// detail "(a, b) → (c)" から pre/post の引数名列を取る（postSymbol が無い時のフォールバック）
+// detail "(a, b) → (b, a)" から pre/post の引数名列を取る（postSymbol が無い時のフォールバック）
 function paramsFromDetail(detail: string | undefined): { pre: string[]; post: string[] } | null {
   const m = /\(([^)]*)\)\s*→\s*\(([^)]*)\)/.exec(detail ?? '');
   if (!m) return null;
@@ -9,12 +9,12 @@ function paramsFromDetail(detail: string | undefined): { pre: string[]; post: st
   return { pre: split(m[1]), post: split(m[2]) };
 }
 
-// arg-removed: 引数が減った関数の呼び出しを検出
-// 最初に食い違う位置 i まで引数を渡す呼び出しに限定（最低 i+1 個）。それ未満の呼び出しは影響を受けない
-export const convertArgRemoved: TagConverter = (input) => {
+// arg-reordered: 引数が並び替わった関数の呼び出しを検出
+// 順序が効くのは最初に食い違う位置 i まで渡した呼び出し（最低 i+1 個）
+export const convertArgReordered: TagConverter = (input) => {
   const fromDetail = paramsFromDetail(input.candidate.detail);
   const pre = input.preSymbol.params ?? fromDetail?.pre ?? [];
   const post = input.postSymbol?.params ?? fromDetail?.post ?? [];
-  const minArgs = pre.length > 0 ? firstArgDivergence(pre, post) + 1 : 1;
+  const minArgs = pre.length > 0 ? firstArgDivergence(pre, post) + 1 : 2;
   return usageCallPatterns(input, minArgs);
 };

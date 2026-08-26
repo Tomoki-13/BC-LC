@@ -1,4 +1,5 @@
-import traverse from '@babel/traverse';
+import traverseImport from '@babel/traverse';
+const traverse = ((traverseImport as any).default ?? traverseImport) as typeof traverseImport;
 import * as t from '@babel/types';
 import { ScopeRange } from '../../types/VariableUsage';
 

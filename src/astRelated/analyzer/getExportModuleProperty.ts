@@ -1,6 +1,7 @@
 import { promises as fsPromises } from 'fs';
 import * as parser from '@babel/parser';
-import traverse, { NodePath } from '@babel/traverse';
+import traverseImport, { NodePath } from '@babel/traverse';
+const traverse = ((traverseImport as any).default ?? traverseImport) as typeof traverseImport;
 import * as t from '@babel/types';
 
 import { ModuleExportProperty } from '../../types/FunctionInfo';

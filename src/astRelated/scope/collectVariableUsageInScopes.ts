@@ -1,4 +1,5 @@
-import traverse from '@babel/traverse';
+import traverseImport from '@babel/traverse';
+const traverse = ((traverseImport as any).default ?? traverseImport) as typeof traverseImport;
 import * as t from '@babel/types';
 
 // 指定された変数名に対応するスコープ範囲（複数ある場合も）を抽出

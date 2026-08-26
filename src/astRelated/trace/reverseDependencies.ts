@@ -1,3 +1,4 @@
+//copy R-BC src/astRelated/trace/reverseDependencies.ts
 import { OutboundFileDependencies, InboundFunctionDependencies, DependencyInfo } from '../../types/FileDependencies';
 
 //あるファイルが呼び出されているファイルを網羅的に取得する例：AがBとCに呼び出されている)

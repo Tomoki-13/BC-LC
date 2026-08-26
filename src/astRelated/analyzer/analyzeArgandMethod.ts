@@ -1,5 +1,6 @@
 import { promises as fsPromises } from 'fs';
-import traverse, { NodePath } from '@babel/traverse';
+import traverseImport, { NodePath } from '@babel/traverse';
+const traverse = ((traverseImport as any).default ?? traverseImport) as typeof traverseImport;
 import * as t from '@babel/types';
 
 import { FunctionInfo_funcRange } from '../../types/FunctionInfo';

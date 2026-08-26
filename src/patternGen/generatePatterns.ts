@@ -31,7 +31,9 @@ export function generatePatterns(
     const converter = CONVERTERS[candidate.tag];
     const preSymbol = resolveSymbol(candidate, preSurface);
     const postSymbol = postSurface?.symbols.find(s => s.name === candidate.symbol);
-    const produced = converter ? converter({ candidate, preSymbol, postSymbol }) : [];
+    // 環境系タグ（node-npm-requirement-raised）は engines を参照するため surface から渡す
+    const engines = { pre: preSurface?.engines, post: postSurface?.engines };
+    const produced = converter ? converter({ candidate, preSymbol, postSymbol, engines }) : [];
     if (produced.length === 0) {
       skipped.push({ tag: candidate.tag, symbol: candidate.symbol });
       // NOTE: パターンが1件も出なかった候補は skipped に回し，generatePatterns の呼び出し元でログに出す

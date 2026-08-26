@@ -1,3 +1,4 @@
+//copy R-BC src/types/FileDependencies.ts
 export interface DependencyInfo {
   dep_filepath: string; // メソッド，インタフェースが定義されているファイル
   functions: string[];

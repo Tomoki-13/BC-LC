@@ -1,3 +1,4 @@
+//copy R-BC src/types/ExtractFunctionCallsResult.ts
 export type ExtractFunctionCallsResult = {
   FunctionCallCode: string; // 関数呼び出しコード
   filePath: string;         // ファイルパス

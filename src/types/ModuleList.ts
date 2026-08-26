@@ -1,3 +1,4 @@
+//copy R-BC src/types/ModuleList.ts
 export interface ModuleList {
   code: string;
   modulename: string;

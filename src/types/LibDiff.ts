@@ -25,6 +25,20 @@ export interface ApiSymbol {
   filePath: string;        // repo 相対パス
 }
 
+/**
+ * .d.ts による surface 抽出の妥当性検証（ライブラリが型定義を同梱する場合のみ）
+ *   hasDts=false: 型定義なし（記録のみ）。ある場合は宣言 export 名の何%を surface が捕捉できたか
+ */
+export interface DtsValidation {
+  hasDts: boolean;
+  dtsFile?: string;         // 検証に使った .d.ts の相対パス
+  dtsExportCount?: number;  // .d.ts が宣言する「値」export 名の数（coverage の分母）
+  typeExportCount?: number; // 型のみ export（interface/type/enum）の数。ランタイムに無いので分母から除外
+  matchedCount?: number;    // surface が捕捉できた値 export の数
+  coverage?: number;        // matchedCount / dtsExportCount（値 export のみ）
+  missing?: string[];       // .d.ts の値 export で surface に無い名前（真の抽出漏れの手がかり）
+}
+
 /** あるバージョンの API surface */
 export interface ApiSurface {
   version: string;
@@ -33,6 +47,7 @@ export interface ApiSurface {
   symbols: ApiSymbol[];
   engines?: { node?: string; npm?: string }; // package.json engines（必要ランタイム版・range 文字列）
   moduleType?: 'module' | 'commonjs';        // package.json type（module=ESM / 無指定は commonjs）
+  dtsValidation?: DtsValidation;             // .d.ts との突き合わせ（抽出の妥当性検証）
 }
 
 // ---- 損失候補（差分結果。L2 で生成） ----

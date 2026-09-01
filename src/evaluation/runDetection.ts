@@ -40,6 +40,7 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
 
   const records: DetectionRecord[] = [];
   const patternRecords: PatternRecord[] = []; // 損失候補 → R-BC 形式パターン（evaluated ペアのみ）
+  const dtsRecords: Array<{ libName: string; version: string; hasDts: boolean; coverage?: number; missing?: string[] }> = []; // .d.ts 妥当性検証（版ごと）
   const excludedRecord = (pair: GroundTruthPair, reason: string, analyzability: Analyzability): DetectionRecord =>
     ({ ...pair, status: 'excluded', reason, analyzability, candidates: [] });
 
@@ -92,6 +93,7 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
         try {
           LibRepo.checkoutVersion(repoDir, commitRef);
           const surface = await ApiSurface.buildApiSurface(repoDir, version, commitRef);
+          dtsRecords.push({ libName, version, ...(surface.dtsValidation ?? { hasDts: false }) }); // .d.ts 妥当性検証（抽出の網羅性）
           if (surface.symbols.length === 0) {
             logger.warn(libName, version, 'surface', `export 関数が0件（抽出漏れ/ビルド成果物未コミット等）ref=${commitRef.slice(0, 12)}`);
             result = { surface, reason: 'empty' };
@@ -150,11 +152,25 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
   OutputJson.createOutputDirectory(patternsDir);
   fs.writeFileSync(path.join(patternsDir, 'patterns.json'), JSON.stringify(patternRecords, null, 2));
 
-  logger.flush(path.resolve(process.cwd(), AUDIT_DIR), 'runDetection'); // 監査ログは audit/ へ
+  // .d.ts 妥当性検証を audit へ（型定義がある版のみ coverage、無い版は hasDts:false を記録）
+  const auditDir = path.resolve(process.cwd(), AUDIT_DIR);
+  OutputJson.createOutputDirectory(auditDir);
+  const withDts = dtsRecords.filter(d => d.hasDts);
+  const dtsSummary = {
+    versionsChecked: dtsRecords.length,
+    withDts: withDts.length,
+    withoutDts: dtsRecords.length - withDts.length,
+    avgCoverage: withDts.length ? +(withDts.reduce((n, d) => n + (d.coverage ?? 0), 0) / withDts.length).toFixed(3) : null,
+    records: dtsRecords,
+  };
+  fs.writeFileSync(path.join(auditDir, 'dts_coverage.json'), JSON.stringify(dtsSummary, null, 2));
+
+  logger.flush(auditDir, 'runDetection'); // 監査ログは audit/ へ
   const evaluated = records.filter(r => r.status === 'evaluated').length;
   const totalPatterns = patternRecords.reduce((n, r) => n + r.patterns.length, 0);
   console.log(`[Done] records=${records.length} (evaluated=${evaluated}, excluded=${records.length - evaluated}) → ${outputDir}/records.json`);
   console.log(`[Done] patterns=${totalPatterns} (pairs=${patternRecords.length}) → ${patternsDir}/patterns.json`);
+  console.log(`[Done] dts: ${withDts.length}/${dtsRecords.length} 版に型定義あり (avgCoverage=${dtsSummary.avgCoverage}) → ${auditDir}/dts_coverage.json`);
 }
 
 // CLI 直接実行時のみ走らせる（import 時は走らせない）

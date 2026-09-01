@@ -4,6 +4,7 @@ import getAllFiles from '../utils/getAllFiles';
 import { getFunction } from '../astRelated/trace/getFunction';
 import { getExportedNames } from '../astRelated/trace/getExportedNames';
 import type { ApiSymbol, ApiSurface, ExportStyle, SymbolKind } from '../types/LibDiff';
+import { validateAgainstDts } from './dtsValidation';
 
 const SOURCE_EXT = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'];
 
@@ -84,7 +85,7 @@ async function buildApiSurface(treeDir: string, version: string, tag: string): P
   for (const f of await listSourceFiles(treeDir)) {
     symbols.push(...await extractExports(f, treeDir));
   }
-  return { version, tag, scope: 'export', symbols, engines: readEngines(treeDir), moduleType: readModuleType(treeDir) };
+  return { version, tag, scope: 'export', symbols, engines: readEngines(treeDir), moduleType: readModuleType(treeDir), dtsValidation: validateAgainstDts(treeDir, symbols) };
 }
 
 export default {

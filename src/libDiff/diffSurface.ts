@@ -142,8 +142,13 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
       // 2a) arg-added / arg-removed / arg-reordered: 引数の増減・並び替え
       const paramTag = diffParams(a.params ?? [], b.params ?? []);
       if (paramTag) {
-        once(`${a.filePath}:${paramTag}`, () => out.push(make(b, paramTag, 'structural',
-          `(${(a.params ?? []).join(', ')}) → (${(b.params ?? []).join(', ')})`)));
+        const pre = a.params ?? [], post = b.params ?? [];
+        // 末尾のみ削除（post が pre の接頭辞）＝ 余剰引数。c を渡す者だけ検出するが JS は余剰引数を無視し無害な場合あり → semantic
+        // 中間削除/並び替え/追加は位置がずれ確実に破壊 → structural
+        const trailingRemoval = paramTag === 'arg-removed' && post.every((p, i) => p === pre[i]);
+        const conf: Confidence = trailingRemoval ? 'semantic' : 'structural';
+        once(`${a.filePath}:${paramTag}`, () => out.push(make(b, paramTag, conf,
+          `(${pre.join(', ')}) → (${post.join(', ')})`)));
       }
 
       // 2b) return-changed: 返り値（整形だけの差＝関数↔アロー等の一部ノイズは空白正規化で無視）

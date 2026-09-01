@@ -6,13 +6,12 @@ import OutputJson from './utils/output_json';
 import DiffSurface from './libDiff/diffSurface';
 import LibRepo from './libDiff/libRepo';
 import { extractRepositoryUrl } from './collectDataset/npm/registry';
-import { CLONE_BASE, toDirName, fetchPackument, buildSurfaceForVersion } from './utils/evalShared';
+import { CLONE_BASE, toDirName, fetchPackument, buildSurfaceForVersion, LossCandidate, PatternRecord } from './utils/evalShared';
 import { generatePatterns } from './patternGen/generatePatterns';
-import type { GeneratedPattern } from './types/patternTypes';
 
 // 8 ライブラリ（version ペア）だけで pattern 生成を回して目視できるようにする実行スクリプト
 //   入力: ../../datasets/targets.json / clonedata/lib_versions/<lib>（既存クローンを使う）
-//   出力: R-BC 形式のパターン(GeneratedPattern[]=calls + BC-LC ラベル) を latest/history に BC-LC-8lib として記録
+//   出力: メインパイプライン(outputs/latest/BC-LC)と同形式（library-detect/records.json ＋ patterns/patterns.json ＋ summary.json）
 //   実行: cd src && npx tsx 8-library.ts
 
 const RUN_ID: string = process.env.BCPG_RUN_ID ?? OutputJson.formatDateTime(new Date());
@@ -26,19 +25,23 @@ interface Target {
   postVersion: string;
 }
 
-interface PairReport {
-  libName: string;
-  preVersion: string;
-  postVersion: string;
-  status: 'ok' | 'surface-failed';
-  candidateCount: number;
-  patternCount: number;
-  byTag: Record<string, number>;      // candidate の tag 別内訳
-  skippedTags: string[];              // 変換器未対応で飛ばした tag
+// 損失検出レコード（メイン library-detect/records.json と同形式。8lib は client GT が無いため GT 列は持たない）
+interface DetectRecord8lib {
+  npm_pkg: string;
+  prevVersion: string;
+  updatedVersion: string;
+  status: 'evaluated' | 'surface-failed';
+  candidates: LossCandidate[];   // {tag, detail, confidence}（メイン records の candidates と同形）
+}
+
+// 1ペアの処理結果（records / patterns 用の生データ ＋ ログ集計）
+interface PairResult {
+  record: DetectRecord8lib;
+  patternRecord: PatternRecord;
+  byTag: Record<string, number>;
 }
 
 const cleanVersion = (v: string): string => v.replace(/[^a-zA-Z0-9]/g, '');
-const pairDirName = (t: Target): string => `${toDirName(t.libName)}__${cleanVersion(t.preVersion)}__${cleanVersion(t.postVersion)}`;
 
 /** latest 側へ JSON を書く（ディレクトリは自動生成）。入力: 相対サブパス / data / 出力: 書いた絶対パス */
 function writeLatest(relPath: string, data: unknown): string {
@@ -48,8 +51,8 @@ function writeLatest(relPath: string, data: unknown): string {
   return out;
 }
 
-/** 1 ペアを処理して pattern を生成・出力する。入力: Target / 出力: PairReport */
-async function runPair(target: Target): Promise<PairReport> {
+/** 1 ペアを処理して損失候補・パターンを生成する。入力: Target / 出力: PairResult */
+async function runPair(target: Target): Promise<PairResult> {
   const { libName, preVersion, postVersion } = target;
   const repoDir = path.resolve(process.cwd(), CLONE_BASE, toDirName(libName));
   const packument = await fetchPackument(libName);
@@ -63,25 +66,27 @@ async function runPair(target: Target): Promise<PairReport> {
   const preSurface = await buildSurfaceForVersion(repoDir, preVersion, packument?.versions?.[preVersion]?.gitHead);
   const postSurface = await buildSurfaceForVersion(repoDir, postVersion, packument?.versions?.[postVersion]?.gitHead);
 
-  const base: PairReport = {
-    libName, preVersion, postVersion, status: 'ok', candidateCount: 0, patternCount: 0, byTag: {}, skippedTags: [],
-  };
-  if (!preSurface || !postSurface) return { ...base, status: 'surface-failed' };
+  const idPair = { npm_pkg: libName, prevVersion: preVersion, updatedVersion: postVersion };
+  if (!preSurface || !postSurface) {
+    return {
+      record: { ...idPair, status: 'surface-failed', candidates: [] },
+      patternRecord: { ...idPair, patterns: [], skippedTags: [] },
+      byTag: {},
+    };
+  }
 
-  const candidates = DiffSurface.diffSurface(preSurface, postSurface, libName);
-  const { patterns, skipped } = generatePatterns(candidates, preSurface, postSurface);
+  const fullCandidates = DiffSurface.diffSurface(preSurface, postSurface, libName);
+  const candidates: LossCandidate[] = fullCandidates.map((c: any) => ({ tag: c.tag, detail: c.detail ?? c.label ?? '', confidence: c.confidence ?? '' }));
+  const { patterns, skipped } = generatePatterns(fullCandidates, preSurface, postSurface);
 
   const byTag: Record<string, number> = {};
-  for (const c of candidates) byTag[c.tag] = (byTag[c.tag] ?? 0) + 1;
-  const skippedTags = [...new Set(skipped.map(s => s.tag))];
+  for (const c of fullCandidates) byTag[c.tag] = (byTag[c.tag] ?? 0) + 1;
 
-  // R-BC 形式パターン(calls) に BC-LC ラベルを添えたものを出力（どの損失のパターンか判別できる）
-  const dir = pairDirName(target);
-  writeLatest(path.join(dir, 'patterns.json'), patterns as GeneratedPattern[]);
-  writeLatest(path.join(dir, 'candidates.json'), candidates);
-  writeLatest(path.join(dir, 'skipped.json'), skipped);
-
-  return { ...base, candidateCount: candidates.length, patternCount: patterns.length, byTag, skippedTags };
+  return {
+    record: { ...idPair, status: 'evaluated', candidates },
+    patternRecord: { ...idPair, patterns, skippedTags: [...new Set(skipped.map(s => s.tag))] },
+    byTag,
+  };
 }
 
 /** latest/BC-LC-8lib を history/BC-LC-8lib/<RUN_ID> に退避（履歴は消さず積む） */
@@ -99,16 +104,25 @@ async function main(): Promise<void> {
   const targets = JSON.parse(fs.readFileSync(targetsPath, 'utf-8')) as Target[];
   console.log(`[8-library] targets=${targets.length} (${targetsPath})`);
 
-  const reports: PairReport[] = [];
+  const records: DetectRecord8lib[] = [];
+  const patternRecords: PatternRecord[] = [];
+  const reports: any[] = [];
+
   for (const target of targets) {
-    const report = await runPair(target);
-    reports.push(report);
-    const tags = Object.entries(report.byTag).map(([t, n]) => `${t}:${n}`).join(' ');
-    const skip = report.skippedTags.length ? ` skip[${report.skippedTags.join(',')}]` : '';
-    console.log(`  ${report.libName} ${report.preVersion}→${report.postVersion} [${report.status}] ` +
-      `candidates=${report.candidateCount} patterns=${report.patternCount} {${tags}}${skip}`);
+    const { record, patternRecord, byTag } = await runPair(target);
+    records.push(record);
+    patternRecords.push(patternRecord);
+    reports.push({ ...record, ...patternRecord, candidateCount: record.candidates.length, patternCount: patternRecord.patterns.length, byTag, patterns: undefined, candidates: undefined });
+
+    const tags = Object.entries(byTag).map(([t, n]) => `${t}:${n}`).join(' ');
+    const skip = patternRecord.skippedTags.length ? ` skip[${patternRecord.skippedTags.join(',')}]` : '';
+    console.log(`  ${target.libName} ${target.preVersion}→${target.postVersion} [${record.status}] ` +
+      `candidates=${record.candidates.length} patterns=${patternRecord.patterns.length} {${tags}}${skip}`);
   }
 
+  // メインパイプラインと同じ形式・ディレクトリ名で出力（library-detect/ ＋ patterns/）
+  writeLatest('library-detect/records.json', records);
+  writeLatest('patterns/patterns.json', patternRecords);
   writeLatest('summary.json', { runId: RUN_ID, generatedAt: new Date().toISOString(), reports });
   archive();
   console.log(`[Done] latest=${path.resolve(process.cwd(), LATEST_BASE)}`);

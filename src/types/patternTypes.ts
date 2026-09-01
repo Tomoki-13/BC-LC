@@ -28,6 +28,18 @@ export interface GeneratedPattern {
   importForm: string;                   // 狙った import 形（cjs-require / esm-default / esm-named 等・監査用）
   calls: ExtractFunctionCallsResult[];  // [binding, usage...] R-BC の照合に渡す本体（env パターンでは空）
   env?: EnvPredicate;                   // 環境述語（node-engine 等）。ある場合は環境照合で判定
+  argCheck?: ArgCheck;                  // 引数個数の制約（arg-removed/arg-reordered）。照合時に argTypes.length で判定
+  removedKey?: string;                  // 削除された option キー（option-removed）。照合時に argContexts/コードで判定
+}
+
+/**
+ * 引数個数の制約（arg-removed / arg-reordered）。usage 正規表現に arity を焼かず照合時に判定する
+ *   minArgs        client 呼び出しの argTypes.length がこれ以上なら「削除/入替位置に届く」
+ *   changedIndices 変わった引数の pre 位置（argContexts[idx] で実供給の精緻化に使う・保持のみ）
+ */
+export interface ArgCheck {
+  minArgs: number;
+  changedIndices: number[];
 }
 
 /**

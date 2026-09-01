@@ -67,15 +67,8 @@ export function subpathBindings(libName: string, subpath: string): BindingPart[]
 }
 
 // 呼び出しの引数部（数不問で寛容）＋チェーン抑止。ARGS=`[^)]*` は括弧内のドット/カンマを許すので `sync(['*.js'])` も取りこぼさない
+// arity/option キーは正規表現に焼かず照合時に argTypes.length/argContexts で判定する（GeneratedPattern.argCheck/removedKey）
 const CALL_TAIL = `([^)]*)${CHAIN_GUARD}`;
-
-// 最低 n 個の引数を渡す呼び出しの引数部。escapeFunc の制約でグルーピング不可のため、リテラル括弧＋カンマ反復で近似
-//   n<=0: 数不問 / n=1: 空呼び出しを除外 / n>=2: トップレベルのカンマ n-1 個以上（ネストのカンマは過大カウントしうる近似）
-function callTailMinArgs(n: number): string {
-  if (n <= 0) return CALL_TAIL;
-  if (n === 1) return `(\\s*[^\\s)][^)]*)${CHAIN_GUARD}`;
-  return `([^)]*${',[^)]*'.repeat(n - 1)})${CHAIN_GUARD}`;
-}
 
 /**
  * 別名付きの名前束縛（import { NAME as v1 } / const { NAME: v1 } = require）。usage は捕捉した variable1 を参照
@@ -109,46 +102,32 @@ export function interopDefaultReference(): ExtractFunctionCallsResult {
   return makeCall('\\bvariable1\\.default\\b');
 }
 
-// minArgs: 最低引数個数（既定0＝数不問）。arg-removed/arg-reordered が影響位置から算出して渡す
 /** 束縛を直接呼ぶ使用（default export が関数そのもの）: variable1(...)。出力: usage 要素 */
 // 例: v1(arg)
-export function directCall(minArgs = 0): ExtractFunctionCallsResult {
-  return makeCall(`\\bvariable1${callTailMinArgs(minArgs)}`);
+export function directCall(): ExtractFunctionCallsResult {
+  return makeCall(`\\bvariable1${CALL_TAIL}`);
 }
 
 /** new で呼ぶ使用（default export がクラス）: new variable1(...)。出力: usage 要素 */
 // 例: new v1(arg)
-export function newCall(minArgs = 0): ExtractFunctionCallsResult {
-  return makeCall(`new variable1${callTailMinArgs(minArgs)}`);
+export function newCall(): ExtractFunctionCallsResult {
+  return makeCall(`new variable1${CALL_TAIL}`);
 }
 
 /** transpile 後の default 相互運用の呼び出し: variable1.default(...)。出力: usage 要素 */
 // 例: v1.default(arg)
-export function interopDefaultCall(minArgs = 0): ExtractFunctionCallsResult {
-  return makeCall(`\\bvariable1\\.default${callTailMinArgs(minArgs)}`);
+export function interopDefaultCall(): ExtractFunctionCallsResult {
+  return makeCall(`\\bvariable1\\.default${CALL_TAIL}`);
 }
 
 /** variable1 のメンバ method を呼ぶ使用: variable1.method(...)。入力: method / 出力: usage 要素 */
 // 例: v1.method(arg)
-export function memberCall(method: string, minArgs = 0): ExtractFunctionCallsResult {
-  return makeCall(`\\bvariable1\\.${escapeLiteral(method)}${callTailMinArgs(minArgs)}`);
+export function memberCall(method: string): ExtractFunctionCallsResult {
+  return makeCall(`\\bvariable1\\.${escapeLiteral(method)}${CALL_TAIL}`);
 }
 
 /** 名前 name を直接呼ぶ使用: name(...)（named import 由来）。入力: name / 出力: usage 要素 */
 // 例: name(arg)
-export function namedCall(name: string, minArgs = 0): ExtractFunctionCallsResult {
-  return makeCall(`\\b${escapeLiteral(name)}${callTailMinArgs(minArgs)}`);
-}
-
-// 呼び出し引数の中に特定キーが現れる（option-removed 用）。ARGS 内に \bkey\b を要求
-const callWithKey = (key: string): string => `([^)]*\\b${escapeLiteral(key)}\\b[^)]*)${CHAIN_GUARD}`;
-
-/** variable1.method(... key ...) の呼び出し（削除された option キーを渡すクライアント検出）。入力: method / key */
-export function memberUsageWithKey(method: string, key: string): ExtractFunctionCallsResult {
-  return makeCall(`\\bvariable1\\.${escapeLiteral(method)}${callWithKey(key)}`);
-}
-
-/** name(... key ...) の直呼び出し（named import 由来 + 削除された option キー）。入力: name / key */
-export function directUsageWithKey(name: string, key: string): ExtractFunctionCallsResult {
-  return makeCall(`\\b${escapeLiteral(name)}${callWithKey(key)}`);
+export function namedCall(name: string): ExtractFunctionCallsResult {
+  return makeCall(`\\b${escapeLiteral(name)}${CALL_TAIL}`);
 }

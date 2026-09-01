@@ -27,8 +27,8 @@ export function firstArgDivergence(pre: string[], post: string[]): number {
 
 // 関数は残るが署名/挙動が変わったタグ共通: その関数の「呼び出し」を検出するパターン群
 // default は直呼び/new/interop、名前付きは member/named/別名の各呼び出し
-// minArgs: 最低引数個数（arg-removed/arg-reordered が影響位置から渡す。既定0＝数不問）
-export function usageCallPatterns(input: ConverterInput, minArgs = 0): GeneratedPattern[] {
+// arity は regex に焼かず、呼び出し側の converter が argCheck をパターンに付与する
+export function usageCallPatterns(input: ConverterInput): GeneratedPattern[] {
   const meta = metaOf(input);
   const { preSymbol } = input;
   const name = preSymbol.name;
@@ -41,22 +41,22 @@ export function usageCallPatterns(input: ConverterInput, minArgs = 0): Generated
   if (isDefault) {
     for (const binding of objectBindings(meta.libName)) {
       if (binding.form === 'esm-namespace') continue;
-      out.push({ ...meta, importForm: binding.form, calls: [binding.call, directCall(minArgs)] });
-      out.push({ ...meta, importForm: `${binding.form}#new`, calls: [binding.call, newCall(minArgs)] });
+      out.push({ ...meta, importForm: binding.form, calls: [binding.call, directCall()] });
+      out.push({ ...meta, importForm: `${binding.form}#new`, calls: [binding.call, newCall()] });
     }
     const requireBinding = objectBindings(meta.libName).find(b => b.form === 'cjs-require')!;
-    out.push({ ...meta, importForm: 'cjs-require#interop-default', calls: [requireBinding.call, interopDefaultCall(minArgs)] });
+    out.push({ ...meta, importForm: 'cjs-require#interop-default', calls: [requireBinding.call, interopDefaultCall()] });
     return out;
   }
 
   for (const binding of objectBindings(meta.libName)) {
-    out.push({ ...meta, importForm: binding.form, calls: [binding.call, memberCall(name, minArgs)] });
+    out.push({ ...meta, importForm: binding.form, calls: [binding.call, memberCall(name)] });
   }
   for (const binding of namedBindings(meta.libName, name)) {
-    out.push({ ...meta, importForm: binding.form, calls: [binding.call, namedCall(name, minArgs)] });
+    out.push({ ...meta, importForm: binding.form, calls: [binding.call, namedCall(name)] });
   }
   for (const binding of namedAliasBindings(meta.libName, name)) {
-    out.push({ ...meta, importForm: binding.form, calls: [binding.call, directCall(minArgs)] });
+    out.push({ ...meta, importForm: binding.form, calls: [binding.call, directCall()] });
   }
   return out;
 }

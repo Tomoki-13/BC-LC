@@ -11,7 +11,10 @@ export const CLONE_BASE = '../../clonedata/lib_versions';
 const OUTPUT_BASE = '../../outputs/latest/BC-LC';
 export const LIBRARY_DETECT_DIR = `${OUTPUT_BASE}/library-detect`; // ライブラリ側の損失有無検出（client-detect と対）
 export const PATTERNS_DIR = `${OUTPUT_BASE}/patterns`; // 損失候補 → R-BC 形式の検出パターン（client-detect の照合入力）
-export const CLIENT_DETECT_DIR = `${OUTPUT_BASE}/client-detect`; // パターンをクライアントに照合した結果（changeversion 互換）
+export const CLIENT_DETECT_DIR = `${OUTPUT_BASE}/client-detect`; // 一括実行時の照合結果（patterns と同居。changeversion 互換）
+// 単体 client-detect の出力（一括の BC-LC を上書きしない別木）。latest は毎回入れ替え・history に日時スナップショット
+export const DETECT_STANDALONE_LATEST = '../../outputs/latest/BC-LC-detect';
+export const DETECT_STANDALONE_HISTORY = '../../outputs/history/BC-LC-detect';
 export const CLIENT_REPOS_BASE = '../../clonedata/clientRepos'; // クライアント repo クローン（<lib>/<owner>/<repo>）
 export const TEST_RESULT_PATH = '../../datasets/test_result.json'; // 採点の GT（L 版 × S repo → 合否）。検出入力には使わない
 export const CLIENTS_PATH = '../../datasets/client_detect_clients.json'; // 検出入力: 依存メンバーシップ（state なし・事前用意＝make prepare-clients）

@@ -152,6 +152,18 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
   OutputJson.createOutputDirectory(patternsDir);
   fs.writeFileSync(path.join(patternsDir, 'patterns.json'), JSON.stringify(patternRecords, null, 2));
 
+  // バージョンペア単位でも分割して出す（patterns.json は全体集約で手で確認しづらいため）
+  //   patterns/by-lib/<lib>/<prev>__<upd>.json ＝ その遷移の PatternRecord 単体
+  const byLibDir = path.join(patternsDir, 'by-lib');
+  fs.rmSync(byLibDir, { recursive: true, force: true }); // 前回の残骸を残さない
+  for (const r of patternRecords) {
+    if (r.patterns.length === 0) continue; // 損失候補が無い遷移は書かない
+    const libDir = path.join(byLibDir, toDirName(r.npm_pkg));
+    OutputJson.createOutputDirectory(libDir);
+    const vname = `${r.prevVersion}__${r.updatedVersion}`.replace(/[^a-zA-Z0-9_.@-]/g, '_');
+    fs.writeFileSync(path.join(libDir, `${vname}.json`), JSON.stringify(r, null, 2));
+  }
+
   // .d.ts 妥当性検証を audit へ（型定義がある版のみ coverage、無い版は hasDts:false を記録）
   const auditDir = path.resolve(process.cwd(), AUDIT_DIR);
   OutputJson.createOutputDirectory(auditDir);

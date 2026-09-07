@@ -18,6 +18,7 @@ export const useAst = async (allFiles: string[], libName: string, mode: number =
   let j = 1;
 
   // BC-LC 追加: どのファイルも libName を import していない repo は抽出対象なし（結果は必ず []）
+
   let anyImport = false;
   for (const filePath of allFiles) {
     try { if (extractImportLines(await fsPromises.readFile(filePath, 'utf8'), libName).length > 0) { anyImport = true; break; } } catch { /* skip */ }

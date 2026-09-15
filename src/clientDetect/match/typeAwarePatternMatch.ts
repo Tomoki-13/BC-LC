@@ -74,59 +74,78 @@ function typesCompatible(expectedTypes: string[][], userTypes: string[][], mode:
  * binding→usage の2段照合。calls[0]=binding で実変数名を捕捉し、calls[1..]=usage に差し込んで照合する
  * （パターンは変数1つ variable1 か、変数なし＝binding のみ）
  * 妥当性は usageValid（個数/キー・型なしパターン向け）＋ typesCompatible（型ありパターン向け・将来用）の両方 */
-function matchOne(pattern: GeneratedPattern, groups: ExtractFunctionCallsResult[][], mode: number): string | null {
+function matchOne(pattern: GeneratedPattern, usageByFile: ExtractFunctionCallsResult[][], mode: number): string | null {
   const binding = pattern.calls[0];
   if (!binding) return null;
   const usages = pattern.calls.slice(1);
   const key = bindingVarKey(binding.FunctionCallCode); // (?<variableN>) を持たない binding（esm-named 等）は null
 
   let bindingSrc = escapeFunc(binding.FunctionCallCode);
-  if (key && !bindingSrc.includes(`(?<${key}>`)) bindingSrc = bindingSrc.replace(new RegExp(key, 'g'), `(?<${key}>[\\w$]+)`);
-  let bindingRe: RegExp; try { bindingRe = new RegExp(bindingSrc); } catch { return null; }
+  if (key && !bindingSrc.includes(`(?<${key}>`)) {
+    bindingSrc = bindingSrc.replace(new RegExp(key, 'g'), `(?<${key}>[\\w$]+)`);
+  }
+  let bindingRe: RegExp;
+  try {
+    bindingRe = new RegExp(bindingSrc);
+  } catch {
+    return null;
+  }
 
-  for (const group of groups) {
-    const flat: FlatBlock[] = group.map(b => ({ code: b.FunctionCallCode, types: b.argTypes ?? [], context: b.argContexts ?? [] }));
+  for (const fileUsage of usageByFile) {
+    const blocks: FlatBlock[] = fileUsage.map(b => ({ code: b.FunctionCallCode, types: b.argTypes ?? [], context: b.argContexts ?? [] }));
 
     // binding を満たす行を探す（見つかった位置以降で usage を照合）
-    for (let i = 0; i < flat.length; i++) {
-      const m = flat[i].code.match(bindingRe);
+    for (let i = 0; i < blocks.length; i++) {
+      const m = blocks[i].code.match(bindingRe);
       if (!m) continue;
       const actualVar = key ? m.groups?.[key] : undefined;
       if (key && !actualVar) continue; // 変数捕捉が要るのに取れなければ次の binding 候補へ
 
-      if (usages.length === 0) return group[i].filePath ?? '(matched)'; // binding のみ＝import 成立で命中
+      if (usages.length === 0) return fileUsage[i].filePath ?? '(matched)'; // binding のみ＝import 成立で命中
 
       let allMatched = true;
       for (const usage of usages) {
         const uCode = key && actualVar ? usage.FunctionCallCode.split(key).join(actualVar) : usage.FunctionCallCode;
-        let usageRe: RegExp; try { usageRe = new RegExp(escapeFunc(uCode)); } catch { allMatched = false; break; }
+        let usageRe: RegExp;
+        try {
+          usageRe = new RegExp(escapeFunc(uCode));
+        } catch {
+          allMatched = false;
+          break;
+        }
         const expectedTypes = usage.argTypes ?? []; // パターン側の引数型（将来ライブラリから予測して入れる想定・現状は空）
         let matched = false;
-        for (let j = i + 1; j < flat.length; j++) {
-          if (usageRe.test(normalizeForRegex(flat[j].code))
-            && usageValid(pattern, flat[j])
-            && typesCompatible(expectedTypes, flat[j].types, mode)) { matched = true; break; }
+        for (let j = i + 1; j < blocks.length; j++) {
+          if (usageRe.test(normalizeForRegex(blocks[j].code))
+            && usageValid(pattern, blocks[j])
+            && typesCompatible(expectedTypes, blocks[j].types, mode)) {
+            matched = true;
+            break;
+          }
         }
-        if (!matched) { allMatched = false; break; }
+        if (!matched) {
+          allMatched = false;
+          break;
+        }
       }
-      if (allMatched) return group[i].filePath ?? '(matched)';
+      if (allMatched) return fileUsage[i].filePath ?? '(matched)';
     }
   }
   return null;
 }
 
-/** client(抽出済み groups) に全パターンを照合し、命中を列挙する
+/** client(抽出済み usageByFile) に全パターンを照合し、命中を列挙する
  * mode: 型比較の強さ（0=型を見ない / 1=object キー無視で集合一致 / 2=object:{key} キー部分一致）。
  *   現状の生成パターンは型を持たないため mode に関わらず型比較はスキップされる（arity/key で判定）。
  *   将来ライブラリ側で引数型を予測して argTypes に入れたら mode で型考慮を有効化できる。 */
 export function typeAwarePatternMatch(
   patterns: GeneratedPattern[],
-  groups: ExtractFunctionCallsResult[][],
+  usageByFile: ExtractFunctionCallsResult[][],
   mode: number = 2,
 ): ClientMatch {
   const hits: { pattern: GeneratedPattern; file: string }[] = [];
   for (const p of patterns) {
-    const file = matchOne(p, groups, mode);
+    const file = matchOne(p, usageByFile, mode);
     if (file !== null) hits.push({ pattern: p, file });
   }
   return { matched: hits.length > 0, hits };

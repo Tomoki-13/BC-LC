@@ -7,7 +7,7 @@ import { CLIENTS_PATH, CLIENT_REPOS_BASE } from '../utils/evalShared';
 
 // clonedata/clientRepos/<lib>/<owner>/<repo> に評価で使うクライアント repo を用意する（setup 段）。
 //   R-BC setup.ts の cloneRepos を踏襲: clone → 対象コミット checkout → git clean。
-//   入力は検出入力 clients.json（prepareClients 生成）。無いクライアントだけ clone し、既存は触らない。
+//   入力は検出入力 clients.json（prepareClients 生成）無いクライアントだけ clone し、既存は触らない
 //   commitId は client の固定スナップショット（S__commit_id・版に依らず一定）。lib 側は runDetection が別途 clone。
 
 interface ClientEntry { npm_pkg: string; client: string; commitId: string }
@@ -27,8 +27,22 @@ function cloneUrl(nameWithOwner: string): string {
     : `https://github.com/${nameWithOwner}.git`;
 }
 
+/** base まで遡って、空になった親ディレクトリ（owner/lib）を削除する */
+function removeEmptyAncestors(startDir: string, base: string): void {
+  let dir = startDir;
+  while (dir.startsWith(base) && dir !== base) {
+    try {
+      if (fs.readdirSync(dir).length > 0) break; // 他の成功クローンが残っていれば止める
+      fs.rmdirSync(dir);
+    } catch {
+      break;
+    }
+    dir = path.dirname(dir);
+  }
+}
+
 /** 1クライアントを clone して commit へ checkout（R-BC cloneRepos と同手順）。成功=true */
-function cloneOne(nameWithOwner: string, commitId: string, repoDir: string): boolean {
+function cloneOne(nameWithOwner: string, commitId: string, repoDir: string, base: string): boolean {
   const ownerDir = path.dirname(repoDir);
   try {
     fs.mkdirSync(ownerDir, { recursive: true });
@@ -41,6 +55,7 @@ function cloneOne(nameWithOwner: string, commitId: string, repoDir: string): boo
     return true;
   } catch {
     fs.rmSync(repoDir, { recursive: true, force: true }); // 中途半端な clone を残さない
+    removeEmptyAncestors(ownerDir, base);                 // 空になった owner/lib ディレクトリも掃除
     return false;
   }
 }
@@ -50,7 +65,9 @@ function cloneOne(nameWithOwner: string, commitId: string, repoDir: string): boo
  *   入力: なし（clients.json を読む）/ 出力: なし（clientRepos を更新）
  *   present=既存でスキップ / cloned=今回 clone 成功 / failed=clone 失敗
  */
-export async function runCloneClients(opts: { sleepMs?: number } = {}): Promise<void> {
+export async function runCloneClients(
+  opts: { sleepMs?: number; baseDir?: string; libsLimit?: number; clientsPerLib?: number } = {},
+): Promise<void> {
   const sleepMs = opts.sleepMs ?? 1500; // API 制限回避（clone した時のみ待つ）
   const clientsPath = path.resolve(process.cwd(), CLIENTS_PATH);
   if (!fs.existsSync(clientsPath)) {
@@ -59,30 +76,52 @@ export async function runCloneClients(opts: { sleepMs?: number } = {}): Promise<
   }
   const entries: ClientEntry[] = JSON.parse(fs.readFileSync(clientsPath, 'utf-8'));
 
-  // (lib, client) 単位に重複排除（同一 client は複数ペアに出るが commit は一定なので clone は1回）
-  const uniq = new Map<string, { npm_pkg: string; client: string; commitId: string }>();
-  for (const e of entries) uniq.set(`${e.npm_pkg}|${e.client}`, { npm_pkg: e.npm_pkg, client: e.client, commitId: e.commitId });
+  // (lib, client) 単位に重複排除して lib ごとにまとめる（同一 client は複数ペアに出るが commit は一定なので clone は1回）
+  const byLib = new Map<string, { npm_pkg: string; client: string; commitId: string }[]>();
+  const seen = new Set<string>();
+  for (const e of entries) {
+    const k = `${e.npm_pkg}|${e.client}`;
+    if (seen.has(k)) continue; seen.add(k);
+    if (!byLib.has(e.npm_pkg)) byLib.set(e.npm_pkg, []);
+    byLib.get(e.npm_pkg)!.push({ npm_pkg: e.npm_pkg, client: e.client, commitId: e.commitId });
+  }
+  let work = [...byLib.values()].flat();
 
-  const base = path.resolve(process.cwd(), CLIENT_REPOS_BASE);
+  // -----------------------------------------------------------
+  // デバッグ: 数を少なくするコード（検証用）
+  //   libsLimit 個の lib × clientsPerLib 個の client だけに絞る。本番は opts 未指定で全件。
+  // -----------------------------------------------------------
+  if (opts.libsLimit !== undefined || opts.clientsPerLib !== undefined) {
+    const nLibs = opts.libsLimit ?? Infinity;
+    const nPer = opts.clientsPerLib ?? Infinity;
+    work = [...byLib.entries()].slice(0, nLibs).flatMap(([, list]) => list.slice(0, nPer));
+    console.log(`[cloneClients] デバッグ縮小: ${nLibs} lib × ${nPer} client = ${work.length} 件`);
+  }
+  // -----------------------------------------------------------
+
+  // 出力先は既定 clientRepos。検証時は baseDir で一時ディレクトリに差し替え可能
+  const base = path.resolve(process.cwd(), opts.baseDir ?? CLIENT_REPOS_BASE);
   let present = 0, cloned = 0, failed = 0;
   const failures: string[] = [];
-  let i = 0;
-  for (const { npm_pkg, client, commitId } of uniq.values()) {
-    i++;
-    const repoDir = path.join(base, npm_pkg, client); // clientRepos/<lib>/<owner>/<repo>
+  for (let i = 0; i < work.length; i++) {
+    const { npm_pkg, client, commitId } = work[i];
+    const repoDir = path.join(base, npm_pkg, client); // <base>/<lib>/<owner>/<repo>
     if (isPresent(repoDir)) { present++; continue; } // 既存はチェックのみでスキップ
-    process.stderr.write(`\r[cloneClients] ${i}/${uniq.size} clone: ${npm_pkg}/${client}                `);
-    const ok = cloneOne(client, commitId, repoDir);
+    process.stderr.write(`\r[cloneClients] ${i + 1}/${work.length} clone: ${npm_pkg}/${client}                `);
+    const ok = cloneOne(client, commitId, repoDir, base);
     if (ok) cloned++; else { failed++; failures.push(`${npm_pkg}/${client}`); }
     await sleep(sleepMs);
   }
   process.stderr.write('\n');
 
-  console.log(`[cloneClients] unique=${uniq.size} present=${present} cloned=${cloned} failed=${failed} → ${base}`);
+  console.log(`[cloneClients] target=${work.length} present=${present} cloned=${cloned} failed=${failed} → ${base}`);
   if (failures.length) console.log(`[cloneClients] 失敗 ${failures.length} 件（先頭）: ${failures.slice(0, 10).join(', ')}`);
 }
 
 // CLI 直接実行時のみ（setup.ts から import された時は走らせない）
+//   CLONE_SAMPLE=1 で検証モード（5lib×5client を testclone/ に clone）。本番は無指定で全件を clientRepos へ
 if (process.argv[1] && /cloneClients\.(ts|js)$/.test(process.argv[1])) {
-  runCloneClients().catch(e => { console.error('[Fatal]', e); process.exit(1); });
+  const sample = process.env.CLONE_SAMPLE === '1';
+  const opts = sample ? { baseDir: '../../testclone', libsLimit: 5, clientsPerLib: 5 } : {};
+  runCloneClients(opts).catch(e => { console.error('[Fatal]', e); process.exit(1); });
 }

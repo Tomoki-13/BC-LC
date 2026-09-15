@@ -80,7 +80,7 @@ export type ChangeTag =
   | 'dependency-changed';    // 依存の変更。TODO: 未導入。間接依存の影響で損失につながる場合もある（間接依存 Phase）
 
 /**
- * 実際に後方互換性の損失として扱うタグ（core の損失判定 judgeLoss とパターン生成 generatePatterns はこれで絞る）
+ * 実際に後方互換性の損失として扱うタグ（diffSurface の損失判定と generatePatterns はこれで絞る）
  *   ここに無いタグ（option-added / arg-added / arg-type-changed / spec-changed / dependency-changed）は
  *   candidates に記録として残すが、損失には数えずパターンも作らない
  */
@@ -118,7 +118,7 @@ export interface LossCandidate {
   tag: ChangeTag;
   label: string;           // 損失内容の説明（どんな後方互換性損失かが分かるラベル）
   confidence: Confidence;
-  verdict?: 'loss';        // 機能1(judgeLoss): 全候補を loss と判定。確実/要確認は confidence 参照
+  verdict?: 'loss';        // 予約フィールド（現在は未設定・未使用）。確実/要確認は confidence 参照
   detail?: string;         // 補足（before/after の要約など）
 }
 

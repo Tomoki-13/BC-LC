@@ -49,22 +49,30 @@ export const useAst = async (allFiles: string[], libName: string, mode: number =
         });
       }
 
-      let funcName: string[] = [];
+      // import 束縛名を起点に、同ファイル内でそれらを介して使われる二次名も辿る
+      // visited で同じ名前を二度展開しない＝自己/相互参照する名前による配列の無限膨張（OOM）を防ぐ
+      const funcNameSet = new Set<string>();
+      const pending: string[] = [];
       for (const line of lines) {
-        let name: string[] = funcNameIdentifiers(line, libName);
-        if (name.length > 0) {
-          funcName.push(...name);
-          for (const one of funcName) {
-            const secUseFuncnames = secfuncNameIdentifiers(one, fileContent);
-            if (secUseFuncnames.length > 0) {
-              funcName.push(...secUseFuncnames);
-            }
+        for (const name of funcNameIdentifiers(line, libName)) {
+          if (!funcNameSet.has(name)) {
+            funcNameSet.add(name);
+            pending.push(name);
+          }
+        }
+      }
+      while (pending.length > 0) {
+        const one = pending.shift()!;
+        for (const sec of secfuncNameIdentifiers(one, fileContent)) {
+          if (!funcNameSet.has(sec)) {
+            funcNameSet.add(sec);
+            pending.push(sec);
           }
         }
       }
 
-      if (funcName.length > 0) {
-        const uniquefuncName: string[] = [...new Set(funcName)];
+      if (funcNameSet.size > 0) {
+        const uniquefuncName: string[] = [...funcNameSet];
 
         for (const one of uniquefuncName) {
           let result: ExtractFunctionCallsResult[] = await analyzeArgAndMethod(filePath, one, reversed);

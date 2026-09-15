@@ -12,11 +12,20 @@ import { ExtractFunctionCallsResult } from '../../types/ExtractFunctionCallsResu
 import { createAstFromFile } from '../base/createAstFromFile';
 
 // 引数まで考慮した関数呼び出しの解析
+// 逆依存グラフの循環（相互 import 等）で無限再帰しないための打ち切り
+//   visited: 解析済みの filePath|funcName を記録し再訪を止める / depth: 保険の深さ上限
+const MAX_TRACE_DEPTH = 20;
+
 export const analyzeArgAndMethod = async (
   filePath: string,
   funcName: string,
   funcDepend: InboundFunctionDependencies[],
+  visited: Set<string> = new Set<string>(),
+  depth: number = 0,
 ): Promise<ExtractFunctionCallsResult[]> => {
+  const visitKey = `${filePath}|${funcName}`;
+  if (depth > MAX_TRACE_DEPTH || visited.has(visitKey)) return [];
+  visited.add(visitKey);
   try {
     const syncResults: ExtractFunctionCallsResult[] = [];
     const promises: Promise<ExtractFunctionCallsResult | null>[] = [];
@@ -134,6 +143,8 @@ export const analyzeArgAndMethod = async (
               fileContent,
               allFunctions,
               funcDepend,
+              visited,
+              depth,
             );
 
             const dedupedArgTypes = finalArgTypes.map((types) => [
@@ -176,6 +187,8 @@ export const analyzeArgAndMethod = async (
                 fileContent,
                 allFunctions,
                 funcDepend,
+                visited,
+                depth,
               );
 
             const dedupedArgTypes = finalArgTypes.map((types) => [
@@ -227,6 +240,8 @@ async function analyzeArguments(
   fileContent: string,
   allFunctions: FunctionInfo_funcRange[],
   funcDepend: InboundFunctionDependencies[],
+  visited: Set<string>,   // analyzeArgAndMethod と共有する訪問済み集合（循環打ち切り用）
+  depth: number,          // 現在の再帰深さ（親の呼び出しへ辿るたびに +1）
 ): Promise<{ finalArgTypes: string[][]; finalArgContexts: string[][] }> {
   const finalArgTypes: string[][] = Array.from(
     { length: args.length },
@@ -293,6 +308,8 @@ async function analyzeArguments(
                 outFileDep.dep_filepath,
                 one,
                 funcDepend,
+                visited,
+                depth + 1,
               );
               for (const recResult of recursiveResult) {
                 const typesFromRec = recResult.argTypes?.[outerArgIndex] || [];

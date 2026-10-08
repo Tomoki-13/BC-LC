@@ -54,7 +54,8 @@ export interface ApiSurface {
 
 /**
  * 変更種別タグ（後方互換性の損失カタログ）
- *   全タグは記録として candidates に残すが、実際に損失として数えるのは LOSS_TAGS のみ
+ *   diffSurface が emit するのは LOSS_TAGS のみ＝それが candidates と結果ラベルに乗る。
+ *   末尾の予約タグは今後の拡張用に型として持つだけで emit しない（分類に使わない）。
  *   （rename は旧名の消失として function-removed/export-removed に含まれるため独立タグは持たない）
  */
 export type ChangeTag =
@@ -72,17 +73,16 @@ export type ChangeTag =
   | 'export-style-changed'   // 公開形/accessPath の変化（cjs/esm・named/default・プロパティ経由）
   | 'return-changed'         // 返り値・仕様の変更（同一シグネチャ）
   | 'node-npm-requirement-raised' // engines 引き上げ（それ未満の利用者が install/実行不可）
-  // --- 記録のみ（損失と言い切れないため LOSS_TAGS から除外）---
-  | 'option-added'           // options キー追加＝加算的で非破壊。損失ではないが記録として保持
-  | 'arg-added'              // 引数の増加。TODO: 追加引数が必須のときだけ破壊だが、現状 必須/任意 の判別が難しく損失に数えない
-  | 'arg-type-changed'       // 引数の型変更。TODO: R-BC 同様の型分析で兆候は見られそうだが誤検出が多そうなため今後
-  | 'spec-changed'           // 仕様変更（曖昧・意味的な受け皿）
-  | 'dependency-changed';    // 依存の変更。TODO: 未導入。間接依存の影響で損失につながる場合もある（間接依存 Phase）
+  // --- 予約（今後利用する可能性があり型として記録するのみ。現状 diffSurface は emit せず、分類にも結果ラベルにも使わない）---
+  | 'option-added'           // options キーの追加＝加算的・非破壊。旧クライアントは影響を受けない
+  | 'arg-added'              // 追加引数が必須か任意か surface（引数名のみ）では判別できず、必須のときだけ破壊なので構造的に断定できない
+  | 'arg-type-changed'       // 引数の型変更。JS の静的解析では型情報を持てないので原理的に検出不能。TODO: R-BC 同様の型分析を入れるなら今後
+  | 'dependency-changed';    // 依存変更は「このライブラリの API 表面」の損失ではなく、間接依存 Phase の領域（未実装）
 
 /**
  * 実際に後方互換性の損失として扱うタグ（diffSurface の損失判定と generatePatterns はこれで絞る）
- *   ここに無いタグ（option-added / arg-added / arg-type-changed / spec-changed / dependency-changed）は
- *   candidates に記録として残すが、損失には数えずパターンも作らない
+ *   ここに無い予約タグ（option-added / arg-added / arg-type-changed / dependency-changed）は
+ *   今後の拡張用に型として定義するのみで、現状 diffSurface は emit しない（候補にも結果ラベルにも出ない）
  */
 export const LOSS_TAGS: ReadonlySet<ChangeTag> = new Set<ChangeTag>([
   'function-removed', 'export-removed', 'module-removed', 'deep-import-broken',

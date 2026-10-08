@@ -32,9 +32,9 @@ function runTagAnalysis(): void {
     predictedLossPairs++;
     const tags = new Set(record.candidates.map(c => c.tag));
     const confidences = new Set(record.candidates.map(c => c.confidence));
-    for (const tag of tags) bump(byTag, tag, record.loss);
-    for (const confidence of confidences) bump(byConfidence, confidence, record.loss);
-    if (tags.size === 1) bump(soleTag, [...tags][0], record.loss);
+    for (const tag of tags) bump(byTag, tag, record.lossByClientTest);
+    for (const confidence of confidences) bump(byConfidence, confidence, record.lossByClientTest);
+    if (tags.size === 1) bump(soleTag, [...tags][0], record.lossByClientTest);
   }
 
   const summary = {

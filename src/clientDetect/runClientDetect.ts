@@ -5,7 +5,7 @@ import path from 'path';
 import OutputJson from '../utils/output_json';
 import {
   computeMetrics, PATTERNS_PATH, CLIENTS_PATH, TEST_RESULT_PATH, CLIENT_REPOS_BASE,
-  CLIENT_DETECT_DIR, DETECT_STANDALONE_LATEST, DETECT_STANDALONE_HISTORY,
+  CLIENT_DETECT_DIR, DETECT_STANDALONE_LATEST, DETECT_STANDALONE_HISTORY, loadRbcClientSet,
 } from '../utils/evalShared';
 import { extractClientUsage } from './extract/extractUsage';
 import { typeAwarePatternMatch } from './match/typeAwarePatternMatch';
@@ -41,6 +41,7 @@ export interface ClientDetectOptions {
   mode?: 'batch' | 'standalone';
   patternsPath?: string;  // patterns.json（ファイル）or それらを含むディレクトリ。既定 = PATTERNS_PATH
   maxLibs?: number;
+  outDir?: string;        // 出力先の明示指定（8lib 等を BC-LC-8lib/client-detect に分離するため。既定は mode から決定）
 }
 
 /** patterns 入力がファイルなら1件、ディレクトリならその下の *.json を全て集める（lib/ペア個別のパスを気にせず読むため） */
@@ -158,12 +159,17 @@ async function detectAll(
   stateIdx: Map<string, string>,
   outBase: string,
   maxLibs: number,
+  rbcSet: Set<string>, // R-BC が評価したクライアント集合（"lib|client"）。ゾーン分け用
 ) {
   const pairKey = (npm: string, prev: string, upd: string) => `${npm}|${prev}|${upd}`;
+  // ゾーン: shared=R-BC も動ける（R-BC 集合に居る）/ bclc-only=BC-LC 拡張（R-BC が failure 無しで届かない）
+  const zoneOf = (lib: string, client: string) => (rbcSet.has(`${lib}|${client}`) ? 'shared' : 'bclc-only');
 
   // 採点用の混同行列（クライアント単位。正例=prev成功→updated失敗）
   const cm = { tp: 0, fp: 0, fn: 0, tn: 0 };
   const cmStruct = { tp: 0, fp: 0, fn: 0, tn: 0 };
+  const cmShared = { tp: 0, fp: 0, fn: 0, tn: 0 };    // head-to-head 母数（R-BC も評価する集合）
+  const cmBclcOnly = { tp: 0, fp: 0, fn: 0, tn: 0 };  // BC-LC 拡張（R-BC が届かない集合）
   const cmLibBase = { tp: 0, fp: 0, fn: 0, tn: 0 }; // 破壊ペアの全クライアントを壊れ予測（基準線）
   const cmNodeEngine = { tp: 0, fp: 0, fn: 0, tn: 0 }; // node-engine 環境述語のみ（env パターンを持つペア限定）
   const perPair: any[] = [];
@@ -174,6 +180,11 @@ async function detectAll(
     failure: { standard: 0, notest: 0, noscript: 0, noPackagejson: 0, valid: 0 },
     success: { standard: 0, notest: 0, noscript: 0, noPackagejson: 0, valid: 0 },
   };
+  // 調査ライブラリごとの検出集計（同一lib内の複数版ペアは client-pair 単位で合算＝混同行列と同じ数え方）
+  //   failScanned=検出対象にできたテスト失敗クライアント数 / failDetected=そのうち検出した数（＝TP）
+  //   succScanned/succDetected はテスト成功クライアント側（succDetected=FP）
+  type LibAgg = { failScanned: number; failDetected: number; succScanned: number; succDetected: number };
+  const byLib = new Map<string, LibAgg>();
 
   const libs = [...new Set(patternRecs.map(r => r.npm_pkg))].slice(0, maxLibs);
   const libSet = new Set(libs);
@@ -217,11 +228,19 @@ async function detectAll(
     fs.writeFileSync(path.join(dir, 'success_matchResults.json'), JSON.stringify(succ.matchResults, null, 2));
 
     // 採点: failure バケットで命中=TP/非命中=FN、success バケットで命中=FP/非命中=TN
+    // pattern-level は全体に加えゾーン別（shared / bclc-only）にも振り分ける
+    for (const c of fail.perClientMatched) {
+      const z = zoneOf(rec.npm_pkg, c.client) === 'shared' ? cmShared : cmBclcOnly;
+      if (c.matched) { cm.tp++; z.tp++; } else { cm.fn++; z.fn++; }
+    }
+    for (const c of succ.perClientMatched) {
+      const z = zoneOf(rec.npm_pkg, c.client) === 'shared' ? cmShared : cmBclcOnly;
+      if (c.matched) { cm.fp++; z.fp++; } else { cm.tn++; z.tn++; }
+    }
     const tally = (m: typeof cm, failRes: typeof fail, succRes: typeof succ) => {
       for (const c of failRes.perClientMatched) { if (c.matched) m.tp++; else m.fn++; }
       for (const c of succRes.perClientMatched) { if (c.matched) m.fp++; else m.tn++; }
     };
-    tally(cm, fail, succ);
     tally(cmStruct, failS, succS);
     // 基準線: 走査できたクライアントは全員「破壊ペアなら壊れ」と予測（pattern-level と同じ母数）
     for (const _ of fail.perClientMatched) (hasPatterns ? cmLibBase.tp++ : cmLibBase.fn++);
@@ -238,11 +257,13 @@ async function detectAll(
       success: { scanned: succ.detect.scannedDirCount, detected: succ.detect.totalClients },
     });
     // 全ペア横断の検出集合（failure=正例側・success=負例側それぞれの検出クライアントと該当パターン明細）
+    //   各 hit に zone（shared / bclc-only）を付けて R-BC との突合・ゾーン別集計をしやすくする
+    const withZone = (arr: typeof fail.detailed) => arr.map(h => ({ ...h, zone: zoneOf(rec.npm_pkg, h.client) }));
     detectedIndex.push({
       npm_pkg: rec.npm_pkg, prevVersion: rec.prevVersion, updatedVersion: rec.updatedVersion, pair: toDir(rec),
       patternCount: rec.patterns.length,
-      failure: { scanned: fail.detect.scannedDirCount, detectedClients: fail.detect.detectedClients, hits: fail.detailed },
-      success: { scanned: succ.detect.scannedDirCount, detectedClients: succ.detect.detectedClients, hits: succ.detailed },
+      failure: { scanned: fail.detect.scannedDirCount, detectedClients: fail.detect.detectedClients, hits: withZone(fail.detailed) },
+      success: { scanned: succ.detect.scannedDirCount, detectedClients: succ.detect.detectedClients, hits: withZone(succ.detailed) },
     });
     // test 種別を全体に加算（fail/succ バケットの detect カウンタから）
     const addTest = (agg: typeof testAgg.failure, d: ExtendedDetectionOutput) => {
@@ -252,12 +273,35 @@ async function detectAll(
     addTest(testAgg.failure, fail.detect);
     addTest(testAgg.success, succ.detect);
 
+    // 調査ライブラリごとに検出対象数・検出数を合算（failure/success 別）
+    const agg = byLib.get(rec.npm_pkg) ?? { failScanned: 0, failDetected: 0, succScanned: 0, succDetected: 0 };
+    agg.failScanned += fail.detect.scannedDirCount; agg.failDetected += fail.detect.totalClients;
+    agg.succScanned += succ.detect.scannedDirCount; agg.succDetected += succ.detect.totalClients;
+    byLib.set(rec.npm_pkg, agg);
+
     if (++processed % 100 === 0) process.stderr.write(`\r  pairs: ${processed}`);
   }
   process.stderr.write('\n');
 
   // 検出クライアント集約を1ファイルで（後段の検出集合突合が walk 不要で済む）
   fs.writeFileSync(path.join(outBase, 'detected_clients.json'), JSON.stringify(detectedIndex, null, 2));
+
+  // 調査ライブラリごとの検出割合を CSV に（失敗クライアント＝主結果、成功クライアント＝参考の誤検出率）
+  //   fail_ratio = fail_detected / fail_scanned（テスト失敗クライアントの検出率＝recall）
+  //   succ_ratio = succ_detected / succ_scanned（テスト成功クライアントで当たった率＝誤検出率）
+  const ratio = (d: number, n: number) => (n > 0 ? (d / n).toFixed(3) : '');
+  const libRows = [...byLib.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const csvHeader = 'library,fail_scanned,fail_detected,fail_ratio,succ_scanned,succ_detected,succ_ratio\n';
+  const tot = { failScanned: 0, failDetected: 0, succScanned: 0, succDetected: 0 };
+  const csvBody = libRows.map(([lib, a]) => {
+    tot.failScanned += a.failScanned; tot.failDetected += a.failDetected;
+    tot.succScanned += a.succScanned; tot.succDetected += a.succDetected;
+    return [lib, a.failScanned, a.failDetected, ratio(a.failDetected, a.failScanned),
+      a.succScanned, a.succDetected, ratio(a.succDetected, a.succScanned)].join(',');
+  }).join('\n');
+  const csvTotal = ['TOTAL', tot.failScanned, tot.failDetected, ratio(tot.failDetected, tot.failScanned),
+    tot.succScanned, tot.succDetected, ratio(tot.succDetected, tot.succScanned)].join(',');
+  fs.writeFileSync(path.join(outBase, 'per_library_summary.csv'), csvHeader + csvBody + '\n' + csvTotal + '\n');
 
   return {
     generatedAt: new Date().toISOString(),
@@ -267,9 +311,14 @@ async function detectAll(
     patternLevel: { ...cm, ...computeMetrics(cm) },
     patternLevel_structuralOnly: { ...cmStruct, ...computeMetrics(cmStruct) },
     nodeEngine: { ...cmNodeEngine, ...computeMetrics(cmNodeEngine) }, // env 述語のみ（node-npm ペア限定）
+    // ゾーン別（R-BC との比較用）: shared=R-BC も評価する head-to-head 母数 / bclcOnly=BC-LC 拡張（R-BC 不能）
+    byZone: {
+      shared: { ...cmShared, ...computeMetrics(cmShared) },
+      bclcOnly: { ...cmBclcOnly, ...computeMetrics(cmBclcOnly) },
+    },
     testBreakdown: testAgg, // 検出クライアントの test 種別内訳（valid=実テストを持つ検出）
     perPair,
-    _cm: { cm, cmStruct, cmNodeEngine, cmLibBase }, // ログ表示用（summary.json には出さない）
+    _cm: { cm, cmStruct, cmNodeEngine, cmLibBase, cmShared, cmBclcOnly }, // ログ表示用（summary.json には出さない）
   };
 }
 
@@ -308,12 +357,16 @@ export async function runClientDetect(opts: ClientDetectOptions = {}): Promise<v
   const stateIdx = new Map<string, string>();
   for (const r of testResult) stateIdx.set(`${r.L__npm_pkg}|${r.S__nameWithOwner}|${r.L__version}`, r.state);
 
-  // 出力先: batch=一括の client-detect（patterns と同居）/ standalone=BC-LC-detect（別木・毎回入れ替え）
-  const outBase = path.resolve(process.cwd(), mode === 'batch' ? CLIENT_DETECT_DIR : DETECT_STANDALONE_LATEST);
-  if (mode === 'standalone') fs.rmSync(outBase, { recursive: true, force: true }); // 前回の残骸で history が混ざらないよう掃除
+  // R-BC が評価したクライアント集合（alldataset_clients）。ゾーン分け（shared / bclc-only）に使う
+  const rbcSet = loadRbcClientSet();
+  if (rbcSet.size === 0) console.warn('[client-detect] alldataset_clients が見つからず zone 分けは全て bclc-only 扱い');
+
+  // 出力先: outDir 明示指定が最優先（8lib を BC-LC-8lib/client-detect に分離）/ 無ければ batch=client-detect・standalone=BC-LC-detect
+  const outBase = path.resolve(process.cwd(), opts.outDir ?? (mode === 'batch' ? CLIENT_DETECT_DIR : DETECT_STANDALONE_LATEST));
+  if (mode === 'standalone' || opts.outDir) fs.rmSync(outBase, { recursive: true, force: true }); // 前回の残骸を掃除
   OutputJson.createOutputDirectory(outBase);
 
-  const summary = await detectAll(patternRecs, clientsByPair, stateIdx, outBase, maxLibs);
+  const summary = await detectAll(patternRecs, clientsByPair, stateIdx, outBase, maxLibs, rbcSet);
   const { _cm, ...summaryOut } = summary;
   fs.writeFileSync(path.join(outBase, 'summary.json'), JSON.stringify(summaryOut, null, 2));
 
@@ -326,16 +379,21 @@ export async function runClientDetect(opts: ClientDetectOptions = {}): Promise<v
   if (mode === 'standalone') {
     fs.writeFileSync(path.join(outBase, 'patterns_used.json'), JSON.stringify(patternRecs, null, 2));
     // 日時スナップショットを history に退避（latest は最新のみ・history はパターンごと積む）
-    const stamp = OutputJson.formatDateTime(new Date());
-    const hist = path.resolve(process.cwd(), DETECT_STANDALONE_HISTORY, stamp);
-    fs.mkdirSync(path.dirname(hist), { recursive: true });
-    fs.cpSync(outBase, hist, { recursive: true });
-    console.log(`[Archive] 単体検出を保存 → ${hist}`);
+    // ただし outDir 明示時（8lib 等）は BC-LC-detect 用の history には積まず latest のみ残す
+    if (!opts.outDir) {
+      const stamp = OutputJson.formatDateTime(new Date());
+      const hist = path.resolve(process.cwd(), DETECT_STANDALONE_HISTORY, stamp);
+      fs.mkdirSync(path.dirname(hist), { recursive: true });
+      fs.cpSync(outBase, hist, { recursive: true });
+      console.log(`[Archive] 単体検出を保存 → ${hist}`);
+    }
   }
 
-  const { cm, cmStruct, cmNodeEngine, cmLibBase } = _cm;
+  const { cm, cmStruct, cmNodeEngine, cmLibBase, cmShared, cmBclcOnly } = _cm;
   console.log(`[Done] client-detect (${mode}) → ${outBase}`);
   console.log(`  pattern-level : P=${summaryOut.patternLevel.precision} R=${summaryOut.patternLevel.recall} F1=${summaryOut.patternLevel.f1} (tp${cm.tp} fp${cm.fp} fn${cm.fn} tn${cm.tn})`);
+  console.log(`  shared(vs RBC): P=${summaryOut.byZone.shared.precision} R=${summaryOut.byZone.shared.recall} F1=${summaryOut.byZone.shared.f1} (tp${cmShared.tp} fp${cmShared.fp} fn${cmShared.fn} tn${cmShared.tn})`);
+  console.log(`  bclc-only     : P=${summaryOut.byZone.bclcOnly.precision} R=${summaryOut.byZone.bclcOnly.recall} F1=${summaryOut.byZone.bclcOnly.f1} (tp${cmBclcOnly.tp} fp${cmBclcOnly.fp} fn${cmBclcOnly.fn} tn${cmBclcOnly.tn})`);
   console.log(`  structural    : P=${summaryOut.patternLevel_structuralOnly.precision} R=${summaryOut.patternLevel_structuralOnly.recall} F1=${summaryOut.patternLevel_structuralOnly.f1}`);
   console.log(`  node-engine   : P=${summaryOut.nodeEngine.precision} R=${summaryOut.nodeEngine.recall} F1=${summaryOut.nodeEngine.f1} (tp${cmNodeEngine.tp} fp${cmNodeEngine.fp} fn${cmNodeEngine.fn} tn${cmNodeEngine.tn})`);
   console.log(`  library-base  : P=${summaryOut.libraryLevel.precision} R=${summaryOut.libraryLevel.recall} F1=${summaryOut.libraryLevel.f1}`);

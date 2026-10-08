@@ -36,7 +36,7 @@ function runReturnAnalysis(): void {
       else if (postCount < preCount) { if (signal === 'text-only') signal = 'seg-decreased'; }
       else if (postCount > preCount) { if (signal === 'text-only') signal = 'seg-increased'; }
     }
-    bump(signal, record.loss);
+    bump(signal, record.lossByClientTest);
   }
 
   const rows = Object.entries(tally)

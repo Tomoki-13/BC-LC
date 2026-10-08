@@ -1,4 +1,4 @@
-import { convertArgRemoved } from '../patternGen/converters/argRemoved';
+import { convertArgReordered } from '../patternGen/converters/argReordered';
 import type { ApiSymbol, ExportStyle, LossCandidate } from '../types/LibDiff';
 import type { ExtractFunctionCallsResult } from '../types/ExtractFunctionCallsResult';
 
@@ -29,25 +29,18 @@ const symbol = (name: string, exportStyle: ExportStyle = 'esm-named'): ApiSymbol
   ({ name, kind: 'function', exportStyle, filePath: 'index.js', params: ['a', 'b'] });
 const candidate = (symbolName: string): LossCandidate => ({
   libName: 'lib', preVersion: '1.0.0', postVersion: '2.0.0', symbol: symbolName, filePath: 'index.js',
-  tag: 'arg-removed', label: '引数の削除', confidence: 'structural',
+  tag: 'arg-reordered', label: '引数の並び替え', confidence: 'structural',
 });
-const anyMatch = (patterns: ReturnType<typeof convertArgRemoved>, code: string) =>
+const anyMatch = (patterns: ReturnType<typeof convertArgReordered>, code: string) =>
   patterns.some(p => matchesClient(p.calls, code));
 
 // ライブラリ例（一般化名）:
-//   pre func1(a, b, c) → post func1(a, c)（中間 b を削除）
-//   arity は regex に焼かず argCheck に持たせる（照合時に argTypes.length≥minArgs で判定＝clientDetect_match でテスト）
-//   ここでは「func1 の呼び出しを検出する regex」＋「argCheck メタが正しく付く」ことを確認
-describe('arg-removed (B) 名前付き func1 中間削除', () => {
-  const preSym: ApiSymbol = { name: 'func1', kind: 'function', exportStyle: 'esm-named', filePath: 'index.js', params: ['a', 'b', 'c'] };
-  const postSym: ApiSymbol = { ...preSym, params: ['a', 'c'] };
-  const patterns = convertArgRemoved({ candidate: candidate('func1'), preSymbol: preSym, postSymbol: postSym });
+//   pre  export function func1(a, b) / post func1(b, a)（同名・順序違い＝位置引数がずれる）
+//   関数は残るので「func1 を位置引数で呼んでいる」クライアントを検出
+describe('arg-reordered (B) 名前付き func1: 呼び出しを検出', () => {
+  const patterns = convertArgReordered({ candidate: candidate('func1'), preSymbol: symbol('func1') });
 
-  test('argCheck: minArgs=2（最初の相違位置+1）/ changedIndices=[1]（削除された b の位置）', () => {
-    for (const p of patterns) expect(p.argCheck).toEqual({ minArgs: 2, changedIndices: [1] });
-  });
-
-  test('func1 の呼び出しを検出（arity は regex では絞らない）', () => {
+  test('cjs-require + 呼び出し l.func1(x, y) を検出', () => {
     expect(anyMatch(patterns, "const l = require('lib');\nl.func1(x, y);")).toBe(true);
   });
 
@@ -55,7 +48,11 @@ describe('arg-removed (B) 名前付き func1 中間削除', () => {
     expect(anyMatch(patterns, "import { func1 } from 'lib';\nfunc1(x, y);")).toBe(true);
   });
 
-  test('参照のみ const g = l.func1; は検出しない', () => {
+  test('別名 import { func1 as f }; f(x, y) を検出', () => {
+    expect(anyMatch(patterns, "import { func1 as f } from 'lib';\nf(x, y);")).toBe(true);
+  });
+
+  test('参照のみ const g = l.func1; は検出しない（呼び出しでないと壊れない）', () => {
     expect(anyMatch(patterns, "const l = require('lib');\nconst g = l.func1;")).toBe(false);
   });
 
@@ -64,10 +61,14 @@ describe('arg-removed (B) 名前付き func1 中間削除', () => {
   });
 });
 
-describe('arg-removed (A) default が関数: 直接呼びを検出', () => {
-  const patterns = convertArgRemoved({ candidate: candidate('default'), preSymbol: symbol('default', 'cjs-module-default') });
+describe('arg-reordered (A) default が関数: 直接呼びを検出', () => {
+  const patterns = convertArgReordered({ candidate: candidate('default'), preSymbol: symbol('default', 'cjs-module-default') });
 
-  test('const F = require("lib"); F(x, y, z) を検出', () => {
-    expect(anyMatch(patterns, "const F = require('lib');\nF(x, y, z);")).toBe(true);
+  test('const F = require("lib"); F(x, y) を検出', () => {
+    expect(anyMatch(patterns, "const F = require('lib');\nF(x, y);")).toBe(true);
+  });
+
+  test('new F(x, y)（コンストラクタ引数の並び替え）を検出', () => {
+    expect(anyMatch(patterns, "import F from 'lib';\nconst o = new F(x, y);")).toBe(true);
   });
 });

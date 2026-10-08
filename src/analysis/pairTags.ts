@@ -21,7 +21,7 @@ const toPairTags = (records: DetectionRecord[]): PairTags[] =>
     lib: r.npm_pkg,
     prevVersion: r.prevVersion,
     updatedVersion: r.updatedVersion,
-    loss: r.loss,
+    loss: r.lossByClientTest,
     tags: [...new Set(r.candidates.map(c => c.tag))],
     confidences: [...new Set(r.candidates.map(c => c.confidence))],
   }));

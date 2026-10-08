@@ -5,7 +5,7 @@ type Category = 'TP' | 'FP' | 'FN' | 'TN';
 /** 検出事実1件の category（loss × predictedLoss）。predictedLoss は candidates のみで決める */
 function categoryOf(record: DetectionRecord): Category {
   const predictedLoss = record.candidates.length > 0;
-  return record.loss ? (predictedLoss ? 'TP' : 'FN') : (predictedLoss ? 'FP' : 'TN');
+  return record.lossByClientTest ? (predictedLoss ? 'TP' : 'FN') : (predictedLoss ? 'FP' : 'TN');
 }
 
 const hasDepChange = (r: DetectionRecord) => (r.depChanges?.length ?? 0) > 0;

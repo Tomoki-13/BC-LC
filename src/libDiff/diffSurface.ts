@@ -17,7 +17,6 @@ function labelOf(tag: ChangeTag): string {
     case 'option-removed':              return 'options キーの削除（クライアントの指定が無視される）';
     case 'option-added':                return 'options キーの追加（加算的・参考）';
     case 'return-changed':              return '返り値・仕様の変更（同一シグネチャ）';
-    case 'spec-changed':                return '仕様変更';
     case 'new-required':                return 'new 必須化/禁止化';
     case 'sync-to-async':               return '同期→非同期の変化（await 要否が変わる）';
     case 'export-style-changed':        return '呼び出し形/公開形式の変更（プロパティ経由など）';
@@ -41,11 +40,12 @@ function indexByName(surface: ApiSurface): Map<string, ApiSymbol[]> {
 }
 
 /** 引数配列の差から arg 系タグを判定（型なし＝arity と名称ベース）
- *  - 個数変化 → arg-added / arg-removed
+ *  - 個数増加 → null（arg-added は追加が必須か任意か surface では判別できず破壊と断定できないため損失分類しない・予約タグ）
+ *  - 個数減少 → arg-removed
  *  - 同数で「同じ名前集合の並び替え」→ arg-reordered（位置がずれるので破壊的）
  *  - 同数で「名前集合が違う」＝単なるリネーム → null（位置引数呼び出しは壊れないので除外＝ノイズ低減） */
 function diffParams(pre: string[], post: string[]): ChangeTag | null {
-  if (post.length > pre.length) return 'arg-added';
+  if (post.length > pre.length) return null;
   if (post.length < pre.length) return 'arg-removed';
   if (pre.every((p, i) => p === post[i])) return null;
   const sameSet = JSON.stringify([...pre].sort()) === JSON.stringify([...post].sort());

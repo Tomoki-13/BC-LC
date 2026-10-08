@@ -7,7 +7,7 @@ import DiffSurface from '../libDiff/diffSurface';
 import LibRepo from '../libDiff/libRepo';
 import ApiScope from '../libDiff/apiScope';
 import type { ScopeMode, ApiUsage, ApiSurface } from '../types/LibDiff';
-import { extractRepositoryUrl } from '../collectDataset/npm/registry';
+import { extractRepositoryUrl } from '../utils/npmRegistry';
 import {
   CLONE_BASE, EVAL_DIR, toDirName,
   loadGroundTruth, groupByLib, fetchPackument, computeMetrics, buildSurfaceForVersion, emptyUsage,
@@ -83,9 +83,9 @@ export async function runScopeCompare(maxLibs: number = Infinity): Promise<void>
           libName,
         ).length > 0;
         const confusion = confusionByMode[mode];
-        if (pair.loss && predictedLoss) confusion.tp++;
-        else if (pair.loss && !predictedLoss) confusion.fn++;
-        else if (!pair.loss && predictedLoss) confusion.fp++;
+        if (pair.lossByClientTest && predictedLoss) confusion.tp++;
+        else if (pair.lossByClientTest && !predictedLoss) confusion.fn++;
+        else if (!pair.lossByClientTest && predictedLoss) confusion.fp++;
         else confusion.tn++;
       }
     }

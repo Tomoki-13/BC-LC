@@ -12,7 +12,7 @@ interface GroundTruth {
   prevVersion: string;
   updatedVersion: string;
   state: 'success' | 'failure';
-  loss: boolean;          // 損失あり = state==='failure'
+  lossByClientTest: boolean;     // 従来研究のGT: クライアントのテストが失敗したか（state==='failure'）。BC-LC の静的判定ではない
   isBreakingByMatsuda: boolean;  // 松田研究 proposal ツールの予測値（データセット側の参考値，本手法の判定でも正解でもない）
   failCount: number;      // stats.failure（何クライアントで失敗したか）
   succCount: number;      // stats.success
@@ -31,7 +31,7 @@ export function runGroundTruth(): void {
       prevVersion: e.prev.version,
       updatedVersion: e.updated.version,
       state: e.state,
-      loss: e.state === 'failure',
+      lossByClientTest: e.state === 'failure',
       isBreakingByMatsuda: !!e.isBreaking,
       failCount: e.stats?.failure ?? 0,
       succCount: e.stats?.success ?? 0,
@@ -44,14 +44,14 @@ export function runGroundTruth(): void {
   fs.writeFileSync(path.join(outDir, 'ground_truth.json'), JSON.stringify(list, null, 2));
 
   // CSV（, " 改行を含む値はクオートしてエスケープ）
-  const header = 'npm_pkg,nameWithOwner,prevVersion,updatedVersion,state,loss,isBreakingByMatsuda,failCount,succCount\n';
+  const header = 'npm_pkg,nameWithOwner,prevVersion,updatedVersion,state,lossByClientTest,isBreakingByMatsuda,failCount,succCount\n';
   const rows = list.map(g =>
-    [g.npm_pkg, g.nameWithOwner, g.prevVersion, g.updatedVersion, g.state, g.loss, g.isBreakingByMatsuda, g.failCount, g.succCount].map(toCsvCell).join(','),
+    [g.npm_pkg, g.nameWithOwner, g.prevVersion, g.updatedVersion, g.state, g.lossByClientTest, g.isBreakingByMatsuda, g.failCount, g.succCount].map(toCsvCell).join(','),
   ).join('\n');
   fs.writeFileSync(path.join(outDir, 'ground_truth.csv'), header + rows);
 
   // サマリ
-  const failure = list.filter(g => g.loss).length;
+  const failure = list.filter(g => g.lossByClientTest).length;
   const success = list.length - failure;
   const libs = new Set(list.map(g => g.npm_pkg)).size;
   console.log(`[GroundTruth] 総数=${list.length}  success(損失なし)=${success}  failure(損失あり)=${failure}  ユニークlib=${libs}`);

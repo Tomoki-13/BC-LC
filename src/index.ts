@@ -5,18 +5,16 @@ import semver from 'semver';
 
 import OutputJson from './utils/output_json';
 import ApiSurfaceExtractor from './libDiff/apiSurface';     // 差分取得: surface 抽出
-import DiffSurface from './libDiff/diffSurface';            // 差分取得: pre/post 比較
 import LibRepo from './libDiff/libRepo';                    // 差分取得: git 操作
-import JudgeLoss from './core/judgeLoss';                   // 機能1: 損失判定
-import { generatePatterns } from './patternGen/generatePatterns'; // 機能2: 損失候補 → R-BC 形式パターン
-import { fetchVersionList, fetchVersionMeta, extractRepositoryUrl } from './collectDataset/npm/registry';
-import { runGroundTruth } from './evaluation/groundTruth';   // 正解ラベル生成
-import { runDetection } from './evaluation/runDetection';    // 事実生成: 全ペア検出 → records.json
-import { runCompare } from './evaluation/compare';           // 採点: records → 混同行列
-import { runScopeCompare } from './evaluation/scopeCompare'; // 比較: 外部API絞り込み mode0/1/2/3
-import { runTagAnalysis } from './analysis/tagAnalysis';     // 分析: タグ別ノイズ源
-import { runPairTags } from './analysis/pairTags';           // 分析: 損失定義ポリシー比較
+import DiffSurface from './libDiff/diffSurface';            // 判定: pre/post 差分（損失候補）
+import { generatePatterns } from './patternGen/generatePatterns'; // 生成: 損失候補 → パターン
+import { runGroundTruth } from './evaluation/groundTruth';  // 評価: 正解ラベル生成
+import { runDetection } from './evaluation/runDetection';   // 判定+生成（全ペア1パス）→ records/patterns
+import { runCompare } from './evaluation/compare';          // 評価: 採点
+import { runScopeCompare } from './evaluation/scopeCompare';// 比較: 外部API絞り込み
 import { runReturnAnalysis } from './analysis/returnAnalysis'; // 分析: return-changed 内訳
+import { runClientDetect } from './clientDetect/runClientDetect'; // 検出: クライアント照合
+import { fetchVersionList, fetchVersionMeta, extractRepositoryUrl } from './utils/npmRegistry';
 import type { ApiSurface, LossCandidate } from './types/LibDiff';
 
 // 実行 ID（Meta の BCPG_RUN_ID を優先、無ければ生成）
@@ -29,7 +27,7 @@ const PATHS = {
   historyBase: `../../outputs/history/BC-LC/libDiff/${RUN_ID}`,       // <lib>/{surfaces,pairs}/
   latestBase: '../../outputs/latest/BC-LC/libDiff',                   // <lib>/{surfaces,pairs}/
   evalLatestBase: '../../outputs/latest/BC-LC',                       // eval パイプラインの最新出力（毎回上書き）
-  evalHistoryBase: `../../outputs/history/BC-LC/eval/${RUN_ID}`,      // 実行ごとの eval 結果アーカイブ（消さず積む）
+  evalHistoryBase: `../../outputs/history/BC-LC/${RUN_ID}`,           // 実行ごとの結果アーカイブ（latest/BC-LC 直下と同じ構造を <RUN_ID>/ 配下に鏡写しで積む）
 };
 
 const cleanVersion = (v: string): string => v.replace(/[^a-zA-Z0-9]/g, '');
@@ -61,7 +59,7 @@ function writeSummary(safeName: string, libraryName: string, losses: LossCandida
 }
 
 /**
- * eval パイプラインの latest 出力を history/eval/<RUN_ID>/ に必ず退避する（履歴は消さず積む）
+ * eval パイプラインの latest 出力を history/BC-LC/<RUN_ID>/ に必ず退避する（latest/BC-LC 直下と同じサブ構造で鏡写し・履歴は消さず積む）
  * 実行日時は ディレクトリ名(RUN_ID=YYYY-MM-DD-HH-mm-ss) と run_info.json の両方に記録し、
  * どの結果がいつのものか一意に分かるようにする
  */
@@ -69,7 +67,7 @@ function archiveEvalToHistory(): void {
   const latest = path.resolve(process.cwd(), PATHS.evalLatestBase);
   const history = path.resolve(process.cwd(), PATHS.evalHistoryBase);
   fs.mkdirSync(history, { recursive: true });
-  for (const sub of ['library-detect', 'patterns', 'eval', 'analysis', 'audit']) {
+  for (const sub of ['library-detect', 'patterns', 'surface', 'client-detect', 'eval', 'analysis', 'audit']) {
     const src = path.join(latest, sub);
     if (fs.existsSync(src)) fs.cpSync(src, path.join(history, sub), { recursive: true });
   }
@@ -141,17 +139,14 @@ function diffPairs(libraryName: string, safeName: string, versions: string[]): v
     const postSurface = readSurface(safeName, cleanVersion(post));
     if (!preSurface || !postSurface) continue;
 
-    // 差分取得（libDiff）
-    const changes = DiffSurface.diffSurface(preSurface, postSurface, libraryName);
-    // 機能1: 後方互換性の損失を判定
-    const losses = JudgeLoss.judge(changes);
+    // 判定（差分）→ 生成（パターン）: 各ディレクトリのトップ関数を直接呼ぶ
+    const losses = DiffSurface.diffSurface(preSurface, postSurface, libraryName);
     allLosses.push(...losses);
     const lossOut = pairPath(safeName, cleanVersion(pre), cleanVersion(post));
     OutputJson.createOutputDirectory(path.dirname(lossOut));
     fs.writeFileSync(lossOut, JSON.stringify(losses, null, 2));
 
-    // 機能2: 損失候補を R-BC 形式の検出パターンに変換（LOSS_TAGS 絞り込みは generatePatterns 内）
-    const { patterns } = generatePatterns(changes, preSurface, postSurface);
+    const { patterns } = generatePatterns(losses, preSurface, postSurface);
     if (patterns.length > 0) {
       const patOut = patternPath(safeName, cleanVersion(pre), cleanVersion(post));
       OutputJson.createOutputDirectory(path.dirname(patOut));
@@ -230,14 +225,13 @@ async function runPair(lib: string, pre: string, post: string): Promise<void> {
     fs.writeFileSync(sp, JSON.stringify(s, null, 2));
   }
 
-  // 差分取得 → 機能1(判定) → 機能2(パターン化)
-  const changes = DiffSurface.diffSurface(preSurface, postSurface, lib);
-  const losses = JudgeLoss.judge(changes);
+  // 判定（差分）→ 生成（パターン）
+  const losses = DiffSurface.diffSurface(preSurface, postSurface, lib);
   const out = pairPath(safeName, cleanVersion(pre), cleanVersion(post));
   OutputJson.createOutputDirectory(path.dirname(out));
   fs.writeFileSync(out, JSON.stringify(losses, null, 2));
 
-  const { patterns } = generatePatterns(changes, preSurface, postSurface);
+  const { patterns } = generatePatterns(losses, preSurface, postSurface);
   if (patterns.length > 0) {
     const po = patternPath(safeName, cleanVersion(pre), cleanVersion(post));
     OutputJson.createOutputDirectory(path.dirname(po));
@@ -273,21 +267,36 @@ async function runSingleLib(libraryName: string): Promise<void> {
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  // 開発/デモ用の個別モード
-  if (args[0] === '--local') { await runLocal(args[1], args[2]); return; }
-  if (args[0] === '--pair') { await runPair(args[1], args[2], args[3]); return; }
-  if (args[0] && !args[0].startsWith('--')) { await runSingleLib(args[0]); return; }
+  // 開発/デモ用の個別モード。--detect を付けると、そのライブラリの生成パターンでクライアント照合まで走らせる
+  //   （検出はそのライブラリの latest patterns ディレクトリを参照・前提=clients.json/クローンが無ければ skip）
+  const wantDetect = args.includes('--detect');
+  const positional = args.filter(a => !a.startsWith('--'));
 
-  // 引数なし = フルパイプライン。重い検出パス(runDetection)は1回だけ走らせ，
-  // その出力 records.json を採点(compare)・分析(3種)が共有して読む（単一パス）
-  runGroundTruth();          // 正解ラベル → eval/ground_truth.json
-  await runDetection();      // 事実生成（重いパス）→ detection/records.json
-  runCompare();              // 採点 → eval/compare_summary.json 他
-  // runTagAnalysis();          // 分析 → analysis/tagAnalysis/
-  // runPairTags();             // 分析 → analysis/pairTags/
-  runReturnAnalysis();       // 分析 → analysis/returnAnalysis/
-  await runScopeCompare();   // 比較 → eval/scope_compare.json（surface を別途作り直す重いパス）
-  archiveEvalToHistory();    // ★latest を history/eval/<RUN_ID> に必ず退避（日時付きで履歴を残す）
+  let detectPatternsDir: string | null = null;
+  if (args[0] === '--local') {
+    await runLocal(positional[0], positional[1]);
+    detectPatternsDir = path.resolve(process.cwd(), PATHS.latestBase, safe(positional[1] || path.basename(positional[0])), 'patterns');
+  } else if (args[0] === '--pair') {
+    await runPair(positional[0], positional[1], positional[2]);
+    detectPatternsDir = path.resolve(process.cwd(), PATHS.latestBase, safe(positional[0]), 'patterns');
+  } else if (args[0] && !args[0].startsWith('--')) {
+    await runSingleLib(positional[0]);
+    detectPatternsDir = path.resolve(process.cwd(), PATHS.latestBase, safe(positional[0]), 'patterns');
+  } else {
+    // 引数なし = フルパイプライン。各ディレクトリのトップ関数を順に呼ぶ（正解→判定+生成→評価→分析→検出）
+    runGroundTruth();          // 正解ラベル → eval/ground_truth.json
+    await runDetection();      // 判定+生成（全ペア1パス）→ library-detect/records.json + patterns/patterns.json
+    runCompare();              // 評価（採点）→ eval/compare_summary.json
+    runReturnAnalysis();       // 分析 → analysis/returnAnalysis/
+    await runScopeCompare();   // 比較 → eval/scope_compare.json
+    await runClientDetect({ mode: 'batch' }); // 検出 → client-detect/（前提が無ければ warn して skip）
+    archiveEvalToHistory();    // ★latest を history/eval/<RUN_ID> に退避（patterns と client-detect を同じ RUN_ID に）
+    return;
+  }
+
+  if (wantDetect && detectPatternsDir) {
+    await runClientDetect({ mode: 'standalone', patternsPath: detectPatternsDir });
+  }
 }
 
 main().catch(e => {

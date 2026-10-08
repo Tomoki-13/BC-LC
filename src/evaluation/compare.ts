@@ -28,7 +28,7 @@ function scoreRecord(record: DetectionRecord): ScoredPair {
     return { ...record, predictedLoss: null, lossCount: 0, tags: '', causes: '', category: '' };
   }
   const predictedLoss = record.candidates.length > 0; // method-limit は candidates=[] → 予測『損失なし』
-  const category: ScoredPair['category'] = record.loss
+  const category: ScoredPair['category'] = record.lossByClientTest
     ? (predictedLoss ? 'TP' : 'FN')
     : (predictedLoss ? 'FP' : 'TN');
   const tags = [...new Set(record.candidates.map(c => c.tag))].join(';');
@@ -75,8 +75,8 @@ export function runCompare(): void {
     externalExcluded: excludedRows.length,                      // リポジトリ無し/clone失敗/版未解決（混同行列の外）
     excludedByReason,
     groundTruth: {
-      failure_loss: evaluatedRows.filter(row => row.loss).length,
-      success_noLoss: evaluatedRows.filter(row => !row.loss).length,
+      failure_loss: evaluatedRows.filter(row => row.lossByClientTest).length,
+      success_noLoss: evaluatedRows.filter(row => !row.lossByClientTest).length,
     },
     confusion: confusionMatrix,
     metrics,
@@ -113,9 +113,9 @@ export function runCompare(): void {
     distributionRows.map(d => [d.tag, d.tp, d.fp, d.total, d.precision].join(',')).join('\n'));
 
   // 素の判定（後方互換）
-  const detailHeader = 'npm_pkg,prevVersion,updatedVersion,groundTruthLoss,predictedLoss,lossCount,status,reason\n';
+  const detailHeader = 'npm_pkg,prevVersion,updatedVersion,lossByClientTest,predictedLoss,lossCount,status,reason\n';
   fs.writeFileSync(path.join(outputDir, 'compare_detail.csv'), detailHeader + scored.map(row =>
-    [row.npm_pkg, row.prevVersion, row.updatedVersion, row.loss, row.predictedLoss, row.lossCount, row.status, row.reason].map(toCsvCell).join(','),
+    [row.npm_pkg, row.prevVersion, row.updatedVersion, row.lossByClientTest, row.predictedLoss, row.lossCount, row.status, row.reason].map(toCsvCell).join(','),
   ).join('\n'));
 
   console.log(JSON.stringify(summary, null, 2));

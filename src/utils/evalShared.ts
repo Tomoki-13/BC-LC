@@ -11,11 +11,13 @@ export const CLONE_BASE = '../../clonedata/lib_versions';
 const OUTPUT_BASE = '../../outputs/latest/BC-LC';
 export const LIBRARY_DETECT_DIR = `${OUTPUT_BASE}/library-detect`; // ライブラリ側の損失有無検出（client-detect と対）
 export const PATTERNS_DIR = `${OUTPUT_BASE}/patterns`; // 損失候補 → R-BC 形式の検出パターン（client-detect の照合入力）
+export const SURFACE_DIR = `${OUTPUT_BASE}/surface`;   // 損失判定に使った pre/post の API surface（<lib>/<prev>__<upd>.json）
 export const CLIENT_DETECT_DIR = `${OUTPUT_BASE}/client-detect`; // 一括実行時の照合結果（patterns と同居。changeversion 互換）
 // 単体 client-detect の出力（一括の BC-LC を上書きしない別木）。latest は毎回入れ替え・history に日時スナップショット
 export const DETECT_STANDALONE_LATEST = '../../outputs/latest/BC-LC-detect';
 export const DETECT_STANDALONE_HISTORY = '../../outputs/history/BC-LC-detect';
 export const CLIENT_REPOS_BASE = '../../clonedata/clientRepos'; // クライアント repo クローン（<lib>/<owner>/<repo>）
+export const ALLDATASET_CLIENTS_BASE = '../../clonedata/alldataset_clients'; // R-BC のクライアント実体（<lib>/<ver>/<state>/<owner>/<repo>）
 export const TEST_RESULT_PATH = '../../datasets/test_result.json'; // 採点の GT（L 版 × S repo → 合否）。検出入力には使わない
 export const CLIENTS_PATH = '../../datasets/client_detect_clients.json'; // 検出入力: 依存メンバーシップ（state なし・事前用意＝make prepare-clients）
 export const PATTERNS_PATH = `${PATTERNS_DIR}/patterns.json`;
@@ -35,7 +37,7 @@ export interface GroundTruthPair {
   prevVersion: string;
   updatedVersion: string;
   state: 'success' | 'failure';
-  loss: boolean;
+  lossByClientTest: boolean;   // 従来研究のGT: クライアントのテストが失敗したか（state==='failure'）。BC-LC の静的判定 bcLoss とは別物
 }
 
 /** 検出した損失候補1件（diffSurface の1タグ。採点/分析はこの3項目のみ参照） */
@@ -89,9 +91,13 @@ export interface DetectionRecord extends GroundTruthPair {
   status: 'evaluated' | 'excluded';
   reason: string;
   analyzability: Analyzability;
+  bcLoss: BcLoss;             // 本研究の損失有無を一目で示す。'loss'=損失候補あり / 'no-loss'=評価済みで候補なし / 'unevaluated'=評価不能(excluded)
   candidates: LossCandidate[];
   depChanges?: DepChange[];   // pre→post の依存 range 変化（signal・採点/FN判定には使わない）
 }
+
+/** DetectionRecord の損失有無ラベル（candidates は LOSS_TAGS のみ emit されるため「候補ありか」で決まる） */
+export type BcLoss = 'loss' | 'no-loss' | 'unevaluated';
 
 /**
  * 1ペアの生成パターン（runDetection が全ペア分を patterns.json に書く。client-detect の照合入力）
@@ -118,6 +124,36 @@ export function loadRecords(): DetectionRecord[] {
 
 /** npm パッケージ名をディレクトリ名に使える形へ（@scope/name → _scope_name） */
 export const toDirName = (packageName: string): string => packageName.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+/** dir 直下のサブディレクトリ名を返す（読めなければ空配列） */
+function subDirs(dir: string): string[] {
+  try { return fs.readdirSync(dir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name); }
+  catch { return []; }
+}
+
+/**
+ * R-BC が評価したクライアント集合を "lib|owner/repo" の Set で返す（alldataset_clients 実体から）。
+ *   R-BC は failure が要るため BC-LC の部分集合。評価のゾーン分け（shared / bclc-only）に使う。
+ *   ディレクトリ構成: alldataset_clients/<lib>/<ver>/<state>/<owner>/<repo>。無ければ空 Set。
+ */
+export function loadRbcClientSet(): Set<string> {
+  const base = path.resolve(process.cwd(), ALLDATASET_CLIENTS_BASE);
+  const set = new Set<string>();
+  if (!fs.existsSync(base)) return set;
+  for (const lib of subDirs(base)) {
+    const libDir = path.join(base, lib);
+    for (const ver of subDirs(libDir)) {
+      const verDir = path.join(libDir, ver);
+      for (const state of subDirs(verDir)) {
+        const stateDir = path.join(verDir, state);
+        for (const owner of subDirs(stateDir)) {
+          for (const repo of subDirs(path.join(stateDir, owner))) set.add(`${lib}|${owner}/${repo}`);
+        }
+      }
+    }
+  }
+  return set;
+}
 
 /** CSV 1セルのエスケープ（, " 改行 を含む値は RFC4180 準拠でクオート） */
 export const toCsvCell = (value: unknown): string => {

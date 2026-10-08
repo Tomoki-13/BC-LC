@@ -1,14 +1,25 @@
 // ==========================================
-// npm registry アクセス
+// npm registry アクセス（共有インフラ）
 // ------------------------------------------
-// 対象ライブラリの公開バージョン一覧を取得し target の「一つ前」を決定
-// ライブラリの git リポジトリ URL も取得（pre/post clone 用）
+// 対象ライブラリの公開バージョン一覧・版メタ・git repo URL を取得する。
+// diff パイプライン（index/8-library/runSample/evaluation）と収集モジュール
+// （collectDataset）の双方が使う共通アクセス層。
 // ==========================================
 
 import semver from 'semver';
-import type { ResolvedVersions } from '../types';
 
 const REGISTRY = 'https://registry.npmjs.org';
+
+/** npm registry から解決したバージョン情報（resolvePreviousVersion の戻り値） */
+export interface ResolvedVersions {
+  libraryName: string;
+  /** 更新後（= targetVersion を正規化したもの） */
+  postVersion: string;
+  /** 更新前（registry 上で post の直前に公開された版） */
+  preVersion: string;
+  /** semver 昇順に並べた候補バージョン一覧 */
+  candidateVersions: string[];
+}
 
 /** スコープ付き(@scope/name)にも対応した encode */
 function encodePkg(libraryName: string): string {
@@ -47,16 +58,34 @@ export async function fetchVersionMeta(libraryName: string, version: string): Pr
  * target（更新後）に対する「一つ前」を決定
  * - 「一つ前」= target より厳密に小さい公開版のうち最大
  * - 既定では target がプレリリースでない限り候補からプレリリースを除外
+ * - knownPrev を渡すと自動算出せずそれを prev に採用する（研究用途）。
+ *   本研究のデータセットは prev がプレリリースの遷移（例 uuid 8.0.0-beta.0 → 8.0.0）を
+ *   含み、自動算出では安定版 target からプレリリース prev を除外して取り違えるため、
+ *   記録済みの prev をそのまま入力する。
  */
 export function resolvePreviousVersion(
   libraryName: string,
   allVersions: string[],
   targetVersion: string,
   includePrerelease = false,
+  knownPrev?: string,
 ): ResolvedVersions {
   const post = semver.valid(targetVersion);
   if (!post) {
     throw new Error(`targetVersion が不正な semver です: ${targetVersion}`);
+  }
+
+  // 記録済み prev を明示入力した場合は自動算出をスキップ
+  if (knownPrev !== undefined) {
+    const pre = semver.valid(knownPrev);
+    if (!pre) {
+      throw new Error(`knownPrev が不正な semver です: ${knownPrev}`);
+    }
+    if (!semver.lt(pre, post)) {
+      throw new Error(`knownPrev(${knownPrev}) が target(${targetVersion}) より前ではありません`);
+    }
+    const candidates = allVersions.filter((v) => semver.valid(v)).sort(semver.compare);
+    return { libraryName, postVersion: post, preVersion: pre, candidateVersions: candidates };
   }
 
   const targetIsPre = semver.prerelease(post) !== null;

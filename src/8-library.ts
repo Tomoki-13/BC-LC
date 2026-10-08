@@ -3,21 +3,26 @@ import fs from 'fs';
 import path from 'path';
 
 import OutputJson from './utils/output_json';
-import DiffSurface from './libDiff/diffSurface';
 import LibRepo from './libDiff/libRepo';
-import { extractRepositoryUrl } from './collectDataset/npm/registry';
+import { extractRepositoryUrl } from './utils/npmRegistry';
 import { CLONE_BASE, toDirName, fetchPackument, buildSurfaceForVersion, LossCandidate, PatternRecord } from './utils/evalShared';
+import DiffSurface from './libDiff/diffSurface';
 import { generatePatterns } from './patternGen/generatePatterns';
+import { runClientDetect } from './clientDetect/runClientDetect';
 
-// 8 ライブラリ（version ペア）だけで pattern 生成を回して目視できるようにする実行スクリプト
-//   入力: ../../datasets/targets.json / clonedata/lib_versions/<lib>（既存クローンを使う）
-//   出力: メインパイプライン(outputs/latest/BC-LC)と同形式（library-detect/records.json ＋ patterns/patterns.json ＋ summary.json）
-//   実行: cd src && npx tsx 8-library.ts
+// targets（version ペア）を入力に pattern 生成を回して目視できるようにする実行スクリプト
+//   入力: TARGETS（既定 ../../datasets/targets.json。研究の全記録ペアは targets.all.json）/ clonedata/lib_versions/<lib>（既存クローンを使う）
+//   出力: メインパイプライン(outputs/latest/BC-LC)と同形式（library-detect/records.json ＋ patterns/patterns.json ＋ summary.json）を RUN_LABEL 名の下に
+//   実行: cd src && npx tsx 8-library.ts          （既定 8lib → BC-LC-8lib）
+//         cd src && TARGETS=../../datasets/targets.all.json RUN_LABEL=BC-LC-all npx tsx 8-library.ts
 
 const RUN_ID: string = process.env.BCPG_RUN_ID ?? OutputJson.formatDateTime(new Date());
-const TARGETS_PATH = '../../datasets/targets.json';
-const LATEST_BASE = '../../outputs/latest/BC-LC-8lib';
-const HISTORY_BASE = `../../outputs/history/BC-LC-8lib/${RUN_ID}`;
+const TARGETS_PATH = process.env.TARGETS ?? '../../datasets/targets.json';
+const RUN_LABEL = process.env.RUN_LABEL ?? 'BC-LC-8lib';
+// history の日付ディレクトリに付ける目印（full 等と並べても一目で 8lib 実行と分かるよう <RUN_ID>-<RUN_TAG> にする）
+const RUN_TAG = process.env.RUN_TAG ?? '8lib';
+const LATEST_BASE = `../../outputs/latest/${RUN_LABEL}`;
+const HISTORY_BASE = `../../outputs/history/${RUN_LABEL}/${RUN_ID}-${RUN_TAG}`;
 
 interface Target {
   libName: string;
@@ -75,12 +80,12 @@ async function runPair(target: Target): Promise<PairResult> {
     };
   }
 
-  const fullCandidates = DiffSurface.diffSurface(preSurface, postSurface, libName);
-  const candidates: LossCandidate[] = fullCandidates.map((c: any) => ({ tag: c.tag, detail: c.detail ?? c.label ?? '', confidence: c.confidence ?? '' }));
-  const { patterns, skipped } = generatePatterns(fullCandidates, preSurface, postSurface);
+  const losses = DiffSurface.diffSurface(preSurface, postSurface, libName);
+  const candidates: LossCandidate[] = losses.map((c: any) => ({ tag: c.tag, detail: c.detail ?? c.label ?? '', confidence: c.confidence ?? '' }));
+  const { patterns, skipped } = generatePatterns(losses, preSurface, postSurface);
 
   const byTag: Record<string, number> = {};
-  for (const c of fullCandidates) byTag[c.tag] = (byTag[c.tag] ?? 0) + 1;
+  for (const c of losses) byTag[c.tag] = (byTag[c.tag] ?? 0) + 1;
 
   return {
     record: { ...idPair, status: 'evaluated', candidates },
@@ -89,7 +94,7 @@ async function runPair(target: Target): Promise<PairResult> {
   };
 }
 
-/** latest/BC-LC-8lib を history/BC-LC-8lib/<RUN_ID> に退避（履歴は消さず積む） */
+/** latest/<RUN_LABEL> を history/<RUN_LABEL>/<RUN_ID>-<RUN_TAG> に退避（履歴は消さず積む・検出結果も含めるため検出後に呼ぶ） */
 function archive(): void {
   const latest = path.resolve(process.cwd(), LATEST_BASE);
   const history = path.resolve(process.cwd(), HISTORY_BASE);
@@ -124,8 +129,20 @@ async function main(): Promise<void> {
   writeLatest('library-detect/records.json', records);
   writeLatest('patterns/patterns.json', patternRecords);
   writeLatest('summary.json', { runId: RUN_ID, generatedAt: new Date().toISOString(), reports });
+  console.log(`[Done] 生成 latest=${path.resolve(process.cwd(), LATEST_BASE)}`);
+
+  // --detect 指定時のみ: 生成した patterns.json で失敗/成功クライアントへの照合まで走らせる（前提が無ければ skip/終了）
+  //   出力は 8lib 成果物と同じ木（BC-LC-8lib/client-detect）に分離し、full の BC-LC-detect と混ざらないようにする
+  if (process.argv.includes('--detect')) {
+    await runClientDetect({
+      mode: 'standalone',
+      patternsPath: path.resolve(process.cwd(), LATEST_BASE, 'patterns/patterns.json'),
+      outDir: path.resolve(process.cwd(), LATEST_BASE, 'client-detect'),
+    });
+  }
+
+  // 生成＋（あれば）検出まで終えた latest を一括で history へ退避（検出結果も同じ <RUN_ID>-<RUN_TAG> に含める）
   archive();
-  console.log(`[Done] latest=${path.resolve(process.cwd(), LATEST_BASE)}`);
 }
 
 main().catch((e) => { console.error('[Fatal]', e); process.exit(1); });

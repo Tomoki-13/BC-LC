@@ -15,12 +15,16 @@ LIB   ?= next
 VER   ?= 2.0.0
 COUNT ?= 5
 
-.PHONY: install collect sample run-sample run-uuid run-globby \
-        run detect compare scope tag-analysis pair-tags return-analysis dep-impact show-result help run-8lib
+.PHONY: install collect sample run-sample run-uuid run-globby sample-uuid \
+        run detect compare setup prepare-clients clone-clients clone-clients-sample client-detect scope tag-analysis pair-tags return-analysis captured-symbols dep-impact show-result help run-8lib build-targets run-all-pairs
 
 # 分析系のパイロット件数（先頭 N lib だけ。空なら全件）
 #   make scope N=5
 N ?=
+
+# client-detect（単体）が参照するパターン（ファイル or ディレクトリ。空なら既定の latest/BC-LC/patterns/patterns.json）
+#   make client-detect PATTERNS=../outputs/history/BC-LC/eval/<RUN_ID>/patterns/patterns.json
+PATTERNS ?=
 
 # ---------------------------------------------------------------
 install: ## 依存パッケージのインストール
@@ -54,8 +58,17 @@ run-uuid: ## 損失検出を uuid 3.4.0 → 7.0.0-beta.0 で実行
 run-globby: ## 損失検出を globby 6.1.0 → 7.0.0 で実行
 	cd $(SRCDIR) && $(TSX) index.ts --pair globby 6.1.0 7.0.0
 
-run-8lib: ## targets.json の8ライブラリで pattern 生成（R-BC形式+ラベル）→ BC-LC-8lib
-	cd $(SRCDIR) && $(TSX) 8-library.ts
+run-8lib: ## targets.json の8版ペアで 判定→生成→検出 を一括 → BC-LC-8lib（patterns と client-detect・history は <日時>-8lib）
+	cd $(SRCDIR) && NODE_OPTIONS=--max-old-space-size=8192 $(TSX) 8-library.ts --detect
+
+build-targets: ## proposal_result の記録(prev,updated)ペアから datasets/targets.all.json を生成（setup 段）
+	cd $(SRCDIR) && $(TSX) setup/buildTargets.ts
+
+run-all-pairs: ## 記録ペア全件(targets.all.json)で pattern 生成 → BC-LC-all（history は <日時>-all・要 build-targets）
+	cd $(SRCDIR) && TARGETS=../../datasets/targets.all.json RUN_LABEL=BC-LC-all RUN_TAG=all $(TSX) 8-library.ts
+
+sample-uuid: ## uuid 3.4.0→8.0.0-beta.0 の1ペアだけ詳細出力（surface/losses/patterns/pkg差分）→ sample/
+	cd $(SRCDIR) && $(TSX) runSample.ts
 
 # ---------------------------------------------------------------
 # 評価（詳細は README.md「評価パイプライン」）
@@ -63,14 +76,29 @@ run-8lib: ## targets.json の8ライブラリで pattern 生成（R-BC形式+ラ
 #   detect  : 検出のみ（records.json だけ作り直す）
 #   compare : 採点のみ（既存 records.json を読み直して再採点。高速）
 # ---------------------------------------------------------------
-run: ## フルパイプライン（正解生成→検出→採点→分析→scope。index.ts だけで全結果）
+run: ## フルパイプライン（正解生成→検出→採点→分析→scope→client-detect。全結果を latest/BC-LC に同居）
 	cd $(SRCDIR) && $(TSX) index.ts
 
-detect: ## 検出のみ実行 → detection/records.json
+detect: ## 検出のみ実行 → library-detect/records.json（＋ patterns/patterns.json ＋ audit/dts_coverage.json）
 	cd $(SRCDIR) && $(TSX) evaluation/runDetection.ts $(N)
 
 compare: ## 採点のみ（records.json を読み直す。検出はしない）→ eval/
 	cd $(SRCDIR) && $(TSX) evaluation/compare.ts
+
+setup: ## 【本実行の前に1回】全前処理を一括実行（現状 = 検出入力 client_detect_clients.json の生成）
+	cd $(SRCDIR) && $(TSX) setup.ts
+
+prepare-clients: ## 検出入力 datasets/client_detect_clients.json のみ生成（setup の個別ステップ）
+	cd $(SRCDIR) && $(TSX) setup/prepareClients.ts
+
+clone-clients: ## 不足クライアントを clonedata/clientRepos に clone（既存はスキップ・要 prepare-clients）
+	cd $(SRCDIR) && $(TSX) setup/cloneClients.ts
+
+clone-clients-sample: ## [検証] 5lib×5client を ../testclone に試し clone（本番の clientRepos は触らない）
+	cd $(SRCDIR) && CLONE_SAMPLE=1 $(TSX) setup/cloneClients.ts
+
+client-detect: ## [単体] 生成パターンをクライアントに照合 → latest/BC-LC-detect（＋history）。PATTERNS=パス/ディレクトリ で参照先指定・N=先頭lib数
+	cd $(SRCDIR) && $(TSX) clientDetect/runClientDetect.ts $(PATTERNS) $(N)
 
 scope: ## 外部API絞り込み mode0/1/2/3 の精度比較だけ単独で（run にも含まれる・高コスト）
 	cd $(SRCDIR) && $(TSX) evaluation/scopeCompare.ts $(N)
@@ -84,6 +112,9 @@ pair-tags: ## 損失定義ポリシー掃引（records.json 由来）
 return-analysis: ## return-changed の内部兆候を分析
 	cd $(SRCDIR) && $(TSX) analysis/returnAnalysis.ts
 
+captured-symbols: ## 破壊検出＋パターン化した関数を列挙（.d.ts 未捕捉も突合）→ analysis/capturedSymbols/
+	cd $(SRCDIR) && $(TSX) analysis/capturedSymbols.ts
+
 dep-impact: ## [調査] 間接依存起因の見落とし: FN vs TN の依存 major-bump 率（→ BC-sample/depImpact/）
 	cd $(SRCDIR) && $(TSX) depImpact/fnDepCorrelation.ts
 
@@ -95,7 +126,7 @@ help: ## このヘルプを表示
 	@echo ""
 	@echo "BC-LC — 使用可能なコマンド一覧"
 	@echo "────────────────────────────────────────────────────────"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 	  awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 

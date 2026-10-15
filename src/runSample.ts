@@ -5,9 +5,11 @@ import { execSync } from 'child_process';
 
 import OutputJson from './utils/output_json';
 import ApiSurface from './libDiff/apiSurface';
-import DiffSurface from './libDiff/diffSurface';
 import LibRepo from './libDiff/libRepo';
-import { fetchVersionMeta, extractRepositoryUrl } from './collectDataset/npm/registry';
+import { fetchVersionMeta, extractRepositoryUrl } from './utils/npmRegistry';
+import DiffSurface from './libDiff/diffSurface';
+import { generatePatterns } from './patternGen/generatePatterns';
+import { runClientDetect } from './clientDetect/runClientDetect';
 
 const clean = (v: string) => v.replace(/[^a-zA-Z0-9]/g, '');
 const safe = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -87,10 +89,10 @@ async function resolveRef(repoDir: string, lib: string, version: string): Promis
 }
 
 async function main(): Promise<void> {
-  const [libArg, preArg, postArg] = process.argv.slice(2);
+  const [libArg, preArg, postArg] = process.argv.slice(2).filter(a => !a.startsWith('--'));
   const lib = libArg || 'uuid';
   const pre = preArg || '3.4.0';
-  const post = postArg || '7.0.0-beta.0';
+  const post = postArg || '8.0.0-beta.0';
   const safeName = safe(lib);
 
   const repoDir = path.resolve(process.cwd(), '../../clonedata/lib_versions', safeName);
@@ -118,8 +120,9 @@ async function main(): Promise<void> {
   const postPkg = readPkg(repoDir);
   const postFiles = listFiles(repoDir);
 
-  // 1) 外部 API（関数名/引数/移動）の損失候補
+  // 1) 判定（差分）→ 生成（パターン）: 各ディレクトリのトップ関数を直接呼ぶ
   const losses = DiffSurface.diffSurface(preSurface, postSurface, lib);
+  const { patterns, skipped } = generatePatterns(losses, preSurface, postSurface);
 
   // 2) npm / 依存 / engines の変化
   const packageDiff = {
@@ -153,6 +156,7 @@ async function main(): Promise<void> {
   w('surface_pre.json', preSurface);
   w('surface_post.json', postSurface);
   w('losses.json', losses);
+  w('patterns.json', patterns);
   w('package_pre.json', prePkg);
   w('package_post.json', postPkg);
   w('package_diff.json', packageDiff);
@@ -165,10 +169,15 @@ async function main(): Promise<void> {
   fs.cpSync(outDir, latestDir, { recursive: true });
 
   console.log(`[Done] ${lib} ${pre} → ${post}`);
-  console.log(`  exports: pre=${preSurface.symbols.length} post=${postSurface.symbols.length}, losses=${losses.length}`);
+  console.log(`  exports: pre=${preSurface.symbols.length} post=${postSurface.symbols.length}, losses=${losses.length}, patterns=${patterns.length} (skipped ${skipped.length})`);
   console.log(`  files: pre=${preFiles.length} post=${postFiles.length}, added=${structureDiff.added.length} removed=${structureDiff.removed.length}`);
   console.log(`  history: ${outDir}`);
   console.log(`  latest : ${latestDir}`);
+
+  // --detect 指定時のみ: 生成した patterns.json でクライアント照合まで走らせる（前提が無ければ skip/終了）
+  if (process.argv.includes('--detect')) {
+    await runClientDetect({ mode: 'standalone', patternsPath: path.join(latestDir, 'patterns.json') });
+  }
 }
 
 main().catch(e => { console.error('[Fatal]', e); process.exit(1); });

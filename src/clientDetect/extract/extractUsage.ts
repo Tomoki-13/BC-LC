@@ -2,6 +2,7 @@
 import { useAst } from './useAst';
 import { listClientFilePaths } from './clientSource';
 import type { ExtractFunctionCallsResult } from '../../types/ExtractFunctionCallsResult';
+import { logEvent } from '../../utils/runLog';
 
 /** 抽出済みクライアント: usageByFile=ファイルごとの [import＋呼び出し]（argTypes/argContexts 付き） */
 export interface ExtractedClient {
@@ -27,7 +28,9 @@ export async function extractClientUsage(repoDir: string, libName: string): Prom
   let usageByFile: ExtractFunctionCallsResult[][] = [];
   try {
     usageByFile = await useAst(paths, libName, 0);
-  } catch {
+  } catch (e: any) {
+    // 抽出失敗は「使用なし」として続行するが、どの repo で落ちたかは記録する
+    logEvent('error', `useAst 失敗: ${e?.message ?? e}`, { repoDir });
     usageByFile = [];
   }
   const out: ExtractedClient = { usageByFile };

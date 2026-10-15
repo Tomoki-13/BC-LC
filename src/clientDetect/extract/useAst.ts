@@ -9,6 +9,13 @@ import { OutboundFileDependencies } from '../../types/FileDependencies';
 import { InboundFunctionDependencies } from '../../types/FileDependencies';
 import { reverseDependencies } from '../../astRelated/trace/reverseDependencies';
 
+// 読み込み記法の空白の揺れをそろえる（パターンは require('lib') / from 'lib' の形で書くため）
+// 例: require ('lib') → require('lib') / require( 'lib' ) → require('lib') / from'lib' → from 'lib'
+const normalizeImportSpacing = (code: string): string => code
+  .replace(/\b(require|import)\s*\(\s*(?=["'`])/g, '$1(')
+  .replace(/(\b(?:require|import)\(["'`][^"'`]*["'`])\s*\)/g, '$1)')
+  .replace(/\bfrom\s*(?=["'`])/g, 'from ');
+
 // mode 0:使用方法をそのまま, 1:使用方法の一部抽象化でパターンに使いやすく
 // クライアントの「ライブラリ使用（import 行＋実際の呼び出し）」を ExtractFunctionCallsResult[][] に抽出する
 export const useAst = async (allFiles: string[], libName: string, mode: number = 0): Promise<ExtractFunctionCallsResult[][]> => {
@@ -134,6 +141,10 @@ export const useAst = async (allFiles: string[], libName: string, mode: number =
             pattern.push(inFileStr);
           }
         }
+      } else if (mode === 0 && inFileStr.length > 0) {
+        // 束縛名が取れない読み込み（import 'lib' / require('lib', 'alias') / foo(require('lib').x) 等）も import 行は残す
+        // （binding のみで判定するパターン＝読み込んだ時点で壊れる損失の照合対象）
+        pattern.push(inFileStr);
       }
     } catch (err) {
       console.error('Error readFile:', err);
@@ -155,7 +166,7 @@ export const useAst = async (allFiles: string[], libName: string, mode: number =
         if (code.endsWith(';')) {
           code = code.slice(0, -1);
         }
-        code = code.trim().replace(/\s+/g, ' ');
+        code = normalizeImportSpacing(code.trim().replace(/\s+/g, ' '));
       }
 
       if (code.length === 0) {

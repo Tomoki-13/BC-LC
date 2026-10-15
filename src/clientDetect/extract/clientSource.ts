@@ -1,13 +1,14 @@
 import fs from 'fs';
 import getAllFiles from '../../utils/getAllFiles';
+import { hasRepoContent } from '../../utils/evalShared';
 
 // ライブラリ側 surface（テスト除外）と違い、第2引数 includeTests=true で test/spec も含める
 
 const MAX_BYTES = 600 * 1024; // 巨大な生成物/データファイルは除外
 
-/** repo 配下の解析対象ファイルの絶対パスを列挙（test 含む・useAst の入力用）。repo が無ければ null */
+/** repo 配下の解析対象ファイルの絶対パスを列挙（test 含む・useAst の入力用）。repo が無い・空なら null（未クローン） */
 export async function listClientFilePaths(repoDir: string): Promise<string[] | null> {
-  if (!fs.existsSync(repoDir)) return null;
+  if (!hasRepoContent(repoDir)) return null;
 
   let files: string[];
   try {

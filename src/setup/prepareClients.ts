@@ -4,6 +4,7 @@ import path from 'path';
 
 import OutputJson from '../utils/output_json';
 import { TEST_RESULT_PATH, CLIENTS_PATH } from '../utils/evalShared';
+import { initRunLog, logEvent } from '../utils/runLog';
 
 // client-detect の検出入力 clients.json を datasets に用意する（setup 段。make prepare-clients）。
 //   版ペアは proposal_result、クライアントは test_result（S=依存 repo）から取る。
@@ -60,5 +61,6 @@ export async function runPrepareClients(): Promise<void> {
 
 // CLI 直接実行時のみ走らせる（setup.ts から import された時は走らせない）
 if (process.argv[1] && /prepareClients\.(ts|js)$/.test(process.argv[1])) {
-  runPrepareClients().catch(e => { console.error('[Fatal]', e); process.exit(1); });
+  initRunLog('prepare-clients');
+  runPrepareClients().catch(e => { logEvent('error', `[Fatal] ${e?.stack ?? e}`); console.error('[Fatal]', e); process.exit(1); });
 }

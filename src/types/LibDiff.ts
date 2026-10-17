@@ -35,8 +35,8 @@ export interface DtsValidation {
   dtsExportCount?: number;  // .d.ts が宣言する「値」export 名の数（coverage の分母）
   typeExportCount?: number; // 型のみ export（interface/type/enum）の数。ランタイムに無いので分母から除外
   matchedCount?: number;    // surface が捕捉できた値 export の数
-  coverage?: number;        // matchedCount / dtsExportCount（値 export のみ）
-  missing?: string[];       // .d.ts の値 export で surface に無い名前（真の抽出漏れの手がかり）
+  coverage?: number;        // matchedCount / dtsExportCount（値 export のみ）。値 export が0件の版は付けない
+  missing?: string[];       // .d.ts の値 export で surface に無い名前（真の抽出漏れの手がかり。default＝モジュール本体）
 }
 
 /** あるバージョンの API surface */
@@ -48,6 +48,21 @@ export interface ApiSurface {
   engines?: { node?: string; npm?: string }; // package.json engines（必要ランタイム版・range 文字列）
   moduleType?: 'module' | 'commonjs';        // package.json type（module=ESM / 無指定は commonjs）
   dtsValidation?: DtsValidation;             // .d.ts との突き合わせ（抽出の妥当性検証）
+  publishedMissing?: PublishedMissing[];     // 公開物に入らないのに main から読み込まれるファイル（package.json に files 指定が無ければ undefined）
+  packageExports?: PackageExports;           // package.json exports（指定が無ければ undefined）
+}
+
+/** package.json exports の要約（どのサブパスを外部に公開し、本体を require で読めるか） */
+export interface PackageExports {
+  subpaths: string[];      // 公開サブパス（'.'・'./v4'・'./feature/*' 等。exports の書き方どおり）
+  rootRequire: boolean;    // 本体 '.' を require で読めるか（条件が import だけなら false）
+}
+
+/** 公開物（npm に載るファイル集合）から欠けたファイルの読み込み 1 件 */
+export interface PublishedMissing {
+  from: string;    // 読み込む側（repo 相対・main 未同梱なら 'package.json#main'）
+  spec: string;    // require / import の指定子（例 './utils'）
+  target: string;  // 解決先のファイル（ツリーには在るが公開物に無い）
 }
 
 // ---- 損失候補（差分結果。L2 で生成） ----
@@ -73,6 +88,8 @@ export type ChangeTag =
   | 'export-style-changed'   // 公開形/accessPath の変化（cjs/esm・named/default・プロパティ経由）
   | 'return-changed'         // 返り値・仕様の変更（同一シグネチャ）
   | 'node-npm-requirement-raised' // engines 引き上げ（それ未満の利用者が install/実行不可）
+  | 'published-file-missing' // 公開物（package.json files）から main が読むファイルが欠落＝読み込み時に Cannot find module
+  | 'exports-restricted'     // package.json exports の新設・縮小で、公開されなくなったサブパス／本体の require が読めなくなる
   // --- 予約（今後利用する可能性があり型として記録するのみ。現状 diffSurface は emit せず、分類にも結果ラベルにも使わない）---
   | 'option-added'           // options キーの追加＝加算的・非破壊。旧クライアントは影響を受けない
   | 'arg-added'              // 追加引数が必須か任意か surface（引数名のみ）では判別できず、必須のときだけ破壊なので構造的に断定できない
@@ -88,6 +105,7 @@ export const LOSS_TAGS: ReadonlySet<ChangeTag> = new Set<ChangeTag>([
   'function-removed', 'export-removed', 'module-removed', 'deep-import-broken',
   'arg-reordered', 'arg-removed', 'sync-to-async', 'new-required', 'module-format-changed',
   'option-removed', 'export-style-changed', 'return-changed', 'node-npm-requirement-raised',
+  'published-file-missing', 'exports-restricted',
 ]);
 
 /** 静的検出の確信度 */
@@ -120,6 +138,8 @@ export interface LossCandidate {
   confidence: Confidence;
   verdict?: 'loss';        // 予約フィールド（現在は未設定・未使用）。確実/要確認は confidence 参照
   detail?: string;         // 補足（before/after の要約など）
+  goneDir?: string;        // deep-import-broken / module-removed で、消えたファイルのディレクトリごと post に無いときの公開サブパス（例 'util'）
+  exportsAllowed?: string[]; // exports-restricted（exports 新設）のとき post で公開されるサブパス（これ以外の deep import が壊れる）
 }
 
 /** 機能2 の出力: 損失をパターン化したもの（P1 形式 + 変更種別タグ） */

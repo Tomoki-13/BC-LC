@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 import OutputJson from '../utils/output_json';
+import { initRunLog, logEvent } from '../utils/runLog';
 
 // パターン生成の版ペア入力 targets.all.json を datasets に用意する（setup 段。make build-targets）。
 //   版ペアは proposal_result.json の記録 (prev.version, updated.version) をそのまま採用（dedup）。
@@ -38,5 +39,6 @@ export async function runBuildTargets(): Promise<void> {
 
 // CLI 直接実行時のみ走らせる（setup.ts から import された時は走らせない）
 if (process.argv[1] && /buildTargets\.(ts|js)$/.test(process.argv[1])) {
-  runBuildTargets().catch(e => { console.error('[Fatal]', e); process.exit(1); });
+  initRunLog('build-targets');
+  runBuildTargets().catch(e => { logEvent('error', `[Fatal] ${e?.stack ?? e}`); console.error('[Fatal]', e); process.exit(1); });
 }

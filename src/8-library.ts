@@ -9,6 +9,7 @@ import { CLONE_BASE, toDirName, fetchPackument, buildSurfaceForVersion, LossCand
 import DiffSurface from './libDiff/diffSurface';
 import { generatePatterns } from './patternGen/generatePatterns';
 import { runClientDetect } from './clientDetect/runClientDetect';
+import { initRunLog, phase, progress, logEvent } from './utils/runLog';
 
 // targets（version ペア）を入力に pattern 生成を回して目視できるようにする実行スクリプト
 //   入力: TARGETS（既定 ../../datasets/targets.json。研究の全記録ペアは targets.all.json）/ clonedata/lib_versions/<lib>（既存クローンを使う）
@@ -105,6 +106,8 @@ function archive(): void {
 }
 
 async function main(): Promise<void> {
+  initRunLog(RUN_LABEL);
+  phase('judge+generate');
   const targetsPath = path.resolve(process.cwd(), TARGETS_PATH);
   const targets = JSON.parse(fs.readFileSync(targetsPath, 'utf-8')) as Target[];
   console.log(`[8-library] targets=${targets.length} (${targetsPath})`);
@@ -113,8 +116,11 @@ async function main(): Promise<void> {
   const patternRecords: PatternRecord[] = [];
   const reports: any[] = [];
 
-  for (const target of targets) {
+  for (let i = 0; i < targets.length; i++) {
+    const target = targets[i];
+    progress({ lib: target.libName, prevVersion: target.preVersion, updatedVersion: target.postVersion, pairIndex: i + 1, pairTotal: targets.length });
     const { record, patternRecord, byTag } = await runPair(target);
+    if (record.status === 'surface-failed') logEvent('warn', 'surface 抽出に失敗（候補・パターンなし）');
     records.push(record);
     patternRecords.push(patternRecord);
     reports.push({ ...record, ...patternRecord, candidateCount: record.candidates.length, patternCount: patternRecord.patterns.length, byTag, patterns: undefined, candidates: undefined });
@@ -142,7 +148,8 @@ async function main(): Promise<void> {
   }
 
   // 生成＋（あれば）検出まで終えた latest を一括で history へ退避（検出結果も同じ <RUN_ID>-<RUN_TAG> に含める）
+  phase('archive');
   archive();
 }
 
-main().catch((e) => { console.error('[Fatal]', e); process.exit(1); });
+main().catch((e) => { logEvent('error', `[Fatal] ${e?.stack ?? e}`); console.error('[Fatal]', e); process.exit(1); });

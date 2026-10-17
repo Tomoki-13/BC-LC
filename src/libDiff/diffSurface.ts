@@ -1,3 +1,4 @@
+import path from 'path';
 import semver from 'semver';
 import type { ApiSurface, ApiSymbol, LossCandidate, ChangeTag, Confidence } from '../types/LibDiff';
 
@@ -23,6 +24,8 @@ function labelOf(tag: ChangeTag): string {
     case 'module-format-changed':       return 'モジュール形式の変更（CJS/ESM）';
     case 'deep-import-broken':          return '内部パス移動（deep import 破壊）';
     case 'node-npm-requirement-raised': return 'node/npm の必要バージョン引き上げ（engines・それ未満の利用者が install/実行不可）';
+    case 'published-file-missing':      return '公開物からのファイル欠落（読み込み時に Cannot find module）';
+    case 'exports-restricted':          return 'package.json exports による公開範囲の縮小（サブパス・require が読めなくなる）';
     case 'dependency-changed':          return '依存の変更';
     default:                            return String(tag);
   }
@@ -104,7 +107,7 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
   //     1)  function-removed / export-removed             名前が post に無い
   //     2a) arg-added / arg-removed / arg-reordered       引数の増減・並び替え
   //     2b) return-changed  2c) sync-to-async  2d) export-style-changed  2e) option-removed  2f) new-required
-  //   package.json（symbol 非依存）: 3a) node-npm-requirement-raised   3b) module-format-changed
+  //   package.json（symbol 非依存）: 3a) node-npm-requirement-raised   3b) module-format-changed   3c) published-file-missing
   //   file-level（サブパス）:        4a) deep-import-broken（移動）      4b) module-removed（削除）
 
   // 1)+2) pre の全 export 名 × 全定義(ファイル)を走査
@@ -220,6 +223,43 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
   }
   // TODO: 代表 export の exportStyle が cjs-*→esm-* の変化も補助信号になり得る（FP 影響を測ってから）
 
+  // 3c) published-file-missing: post で新たに公開物から欠けたファイルを main から読む＝ライブラリの読み込み自体が失敗（symbol 非依存）
+  //   git のツリーにはファイルが在るため surface の差分には現れない（例 get-value 1.3.0 の utils.js、sliced 1.0.0 の lib/sliced.js）
+  const preMissing = new Set((pre.publishedMissing ?? []).map(m => m.target));
+  const newMissing = (post.publishedMissing ?? []).filter(m => !preMissing.has(m.target));
+  if (newMissing.length > 0) {
+    out.push({
+      libName, preVersion: pre.version, postVersion: post.version,
+      symbol: '(package)', filePath: 'package.json',
+      tag: 'published-file-missing', label: labelOf('published-file-missing'), confidence: 'structural',
+      detail: newMissing.map(m => `${m.from} → ${m.spec}（${m.target} が公開物に無い）`).join(' / '),
+    });
+  }
+
+  // 3d) exports-restricted: package.json exports の新設・縮小で、外から読めなくなったサブパス／本体の require
+  const preEx = pre.packageExports;
+  const postEx = post.packageExports;
+  if (postEx) {
+    const covers = (subpaths: string[], p: string) => subpaths.some(x =>
+      x === p || x === './*' || (x.endsWith('/*') && p.startsWith(x.slice(0, -1))));
+    const exportsCandidate = (symbol: string, detail: string, extra: Partial<LossCandidate> = {}): LossCandidate => ({
+      libName, preVersion: pre.version, postVersion: post.version, symbol, filePath: 'package.json',
+      tag: 'exports-restricted', label: labelOf('exports-restricted'), confidence: 'structural', detail, ...extra,
+    });
+    if (!preEx) {
+      // exports の新設: 列挙されたサブパス以外への deep import がすべて ERR_PACKAGE_PATH_NOT_EXPORTED になる
+      if (!postEx.subpaths.some(x => x === './*' || x === './')) {
+        out.push(exportsCandidate('(exports)', `exports 新設（公開は ${postEx.subpaths.join(' ')} のみ）`, { exportsAllowed: postEx.subpaths }));
+      }
+      if (!postEx.rootRequire && pre.moduleType !== 'module') out.push(exportsCandidate('(require)', 'exports 新設で本体を require で読めない'));
+    } else {
+      for (const p of preEx.subpaths) {
+        if (p !== '.' && !covers(postEx.subpaths, p)) out.push(exportsCandidate(p.replace(/^\.\//, ''), `exports から ${p} を削除`));
+      }
+      if (preEx.rootRequire && !postEx.rootRequire) out.push(exportsCandidate('(require)', 'exports の本体から require 条件を削除'));
+    }
+  }
+
   // 4) file-level: pre のファイルが post で消えた＝サブパス import が壊れる。1サブパス=1件（per-name の冗長を排除）
   //   4a deep-import-broken: 名前が post に生存＝移動 ／ 4b module-removed: 名前が全消滅＝削除（名前生存の有無で排他）
   const postNames = new Set(post.symbols.map(s => s.name));
@@ -232,6 +272,9 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
   for (const [file, syms] of preByFile) {
     if (postFiles.has(file)) continue;                       // ファイルは残っている
     const moved = syms.some(s => postNames.has(s.name));     // 名前が post に生存＝移動
+    // ディレクトリごと消えた（post に同じディレクトリ配下の export ファイルが無い）なら、その配下への deep import はすべて壊れる
+    const dir = path.posix.dirname(file);
+    const goneSubpath = dir !== '.' && ![...postFiles].some(f => f.startsWith(`${dir}/`)) ? deriveDirSubpath(dir) : '';
     out.push({
       libName, preVersion: pre.version, postVersion: post.version,
       symbol: deriveSubpath(file), filePath: file,
@@ -239,6 +282,7 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
       label: labelOf(moved ? 'deep-import-broken' : 'module-removed'),
       confidence: 'structural',
       detail: moved ? `${file} 移動（deep import 破壊）` : `${file} 削除`,
+      ...(goneSubpath ? { goneDir: goneSubpath } : {}),
     });
   }
 
@@ -246,11 +290,17 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
 }
 
 // ファイルパスから公開サブパスの手がかりを作る（拡張子・先頭のビルド root・末尾 /index を除く）
-function deriveSubpath(filePath: string): string {
+export function deriveSubpath(filePath: string): string {
   return filePath
     .replace(/\.[cm]?[jt]sx?$/, '')
     .replace(/^(src|lib|dist|build|source|esm|cjs)\//, '')
     .replace(/\/index$/, '');
+}
+
+// ディレクトリから公開サブパスを作る（先頭のビルド root を除く。root そのものなら ''）
+// 例 src/util → util / lib → ''
+function deriveDirSubpath(dir: string): string {
+  return dir.replace(/^(src|lib|dist|build|source|esm|cjs)(\/|$)/, '');
 }
 
 export default {

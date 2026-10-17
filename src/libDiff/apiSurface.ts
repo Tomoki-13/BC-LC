@@ -3,8 +3,9 @@ import path from 'path';
 import getAllFiles from '../utils/getAllFiles';
 import { getFunction } from '../astRelated/trace/getFunction';
 import { getExportedNames } from '../astRelated/trace/getExportedNames';
-import type { ApiSymbol, ApiSurface, ExportStyle, SymbolKind } from '../types/LibDiff';
+import type { ApiSymbol, ApiSurface, ExportStyle, PackageExports, SymbolKind } from '../types/LibDiff';
 import { validateAgainstDts } from './dtsValidation';
+import { findPublishedMissing } from './publishedFiles';
 
 const SOURCE_EXT = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'];
 
@@ -30,6 +31,33 @@ function readModuleType(treeDir: string): 'module' | 'commonjs' {
     return pkg?.type === 'module' ? 'module' : 'commonjs';
   } catch {
     return 'commonjs';
+  }
+}
+
+/** exports の値（条件オブジェクト・配列・文字列）が require で読めるか。条件が import/browser だけなら false */
+function allowsRequire(value: unknown): boolean {
+  if (typeof value === 'string') return !value.endsWith('.mjs');
+  if (Array.isArray(value)) return value.some(allowsRequire);
+  if (value && typeof value === 'object') {
+    const v = value as Record<string, unknown>;
+    return ['require', 'node', 'default'].some(k => k in v && allowsRequire(v[k]));
+  }
+  return false;
+}
+
+/**
+ * package.json exports を読む．入力: 版ツリー / 出力: 公開サブパスと本体の require 可否（exports が無ければ undefined）
+ *   exports はキーが '.' で始まればサブパスの対応表、そうでなければ本体 '.' だけの指定（文字列・条件オブジェクト・配列）
+ */
+function readPackageExports(treeDir: string): PackageExports | undefined {
+  try {
+    const exp = JSON.parse(fs.readFileSync(path.join(treeDir, 'package.json'), 'utf-8'))?.exports;
+    if (exp === undefined || exp === null) return undefined;
+    const isSubpathMap = typeof exp === 'object' && !Array.isArray(exp) && Object.keys(exp).some(k => k.startsWith('.'));
+    if (!isSubpathMap) return { subpaths: ['.'], rootRequire: allowsRequire(exp) };
+    return { subpaths: Object.keys(exp), rootRequire: '.' in exp ? allowsRequire(exp['.']) : false };
+  } catch {
+    return undefined;
   }
 }
 
@@ -85,7 +113,12 @@ async function buildApiSurface(treeDir: string, version: string, tag: string): P
   for (const f of await listSourceFiles(treeDir)) {
     symbols.push(...await extractExports(f, treeDir));
   }
-  return { version, tag, scope: 'export', symbols, engines: readEngines(treeDir), moduleType: readModuleType(treeDir), dtsValidation: validateAgainstDts(treeDir, symbols) };
+  return {
+    version, tag, scope: 'export', symbols,
+    engines: readEngines(treeDir), moduleType: readModuleType(treeDir),
+    dtsValidation: validateAgainstDts(treeDir, symbols),
+    publishedMissing: findPublishedMissing(treeDir), packageExports: readPackageExports(treeDir),
+  };
 }
 
 export default {

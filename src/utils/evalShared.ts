@@ -17,6 +17,16 @@ export const CLIENT_DETECT_DIR = `${OUTPUT_BASE}/client-detect`; // 一括実行
 export const DETECT_STANDALONE_LATEST = '../../outputs/latest/BC-LC-detect';
 export const DETECT_STANDALONE_HISTORY = '../../outputs/history/BC-LC-detect';
 export const CLIENT_REPOS_BASE = '../../clonedata/clientRepos'; // クライアント repo クローン（<lib>/<owner>/<repo>）
+export const REGISTRY_DEPS_CACHE = '../../clonedata/registry-deps'; // npm registry の依存情報キャッシュ（<name>.json＝版→dependencies）
+
+/** クライアント repo がクローン済みか（.git 以外の中身がある）。空ディレクトリ・.git だけのディレクトリは未クローン扱い */
+export function hasRepoContent(repoDir: string): boolean {
+  try {
+    return fs.readdirSync(repoDir).some(name => name !== '.git');
+  } catch {
+    return false;
+  }
+}
 export const ALLDATASET_CLIENTS_BASE = '../../clonedata/alldataset_clients'; // R-BC のクライアント実体（<lib>/<ver>/<state>/<owner>/<repo>）
 export const TEST_RESULT_PATH = '../../datasets/test_result.json'; // 採点の GT（L 版 × S repo → 合否）。検出入力には使わない
 export const CLIENTS_PATH = '../../datasets/client_detect_clients.json'; // 検出入力: 依存メンバーシップ（state なし・事前用意＝make prepare-clients）
@@ -40,11 +50,13 @@ export interface GroundTruthPair {
   lossByClientTest: boolean;   // 従来研究のGT: クライアントのテストが失敗したか（state==='failure'）。BC-LC の静的判定 bcLoss とは別物
 }
 
-/** 検出した損失候補1件（diffSurface の1タグ。採点/分析はこの3項目のみ参照） */
+/** 検出した損失候補1件（diffSurface の1タグ。採点は tag/detail/confidence のみ参照） */
 export interface LossCandidate {
   tag: string;
   detail: string;
   confidence: string;
+  symbol?: string;    // 対象の定義名（損失 API 一覧用。2026-10-09 以前の records には無い）
+  filePath?: string;  // 定義ファイル（repo 相対）
 }
 
 /** 依存 range の pre→post 変化1件（間接依存起因の破壊を測るための signal。採点には不使用） */

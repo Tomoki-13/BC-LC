@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { ResolveMethod } from '../types/LibDiff';
+import { logEvent } from './runLog';
 
 // tag/package-json は高信頼、git-head/commit-message は要目視確認
 const RELIABLE: ResolveMethod[] = ['tag', 'package-json'];
@@ -22,6 +23,8 @@ export default class RunLogger {
     const rec: EventRec = { time: new Date().toISOString(), level, lib, version, phase, message: message.replace(/\s+/g, ' ').trim().slice(0, 300) };
     this.events.push(rec);
     process.stderr.write(`\n[${level}] ${lib}@${version} (${phase}): ${rec.message}\n`);
+    // flush は実行末尾なので、途中で落ちても残るよう errors.jsonl にも即時追記
+    logEvent(level === 'ERROR' ? 'error' : 'warn', rec.message, { lib, version, step: phase });
   }
   error(lib: string, version: string, phase: string, message: string): void { this.event('ERROR', lib, version, phase, message); }
   warn(lib: string, version: string, phase: string, message: string): void { this.event('WARN', lib, version, phase, message); }

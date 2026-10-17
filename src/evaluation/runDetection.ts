@@ -16,6 +16,7 @@ import {
   PatternRecord, toDirName, loadGroundTruth, groupByLib, fetchPackument,
   ExcludeReason, Analyzability, classifyAnalyzability,
 } from '../utils/evalShared';
+import type { DtsValidation } from '../types/LibDiff';
 
 // 1バージョンの surface 取得結果（reason で「なぜ評価不能か」を表す）
 interface SurfaceResult {
@@ -70,7 +71,7 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
   const patternRecords: PatternRecord[] = []; // 損失候補 → R-BC 形式パターン（evaluated ペアのみ）
   // 損失判定に使った pre/post の API surface（evaluated ペアのみ）。<lib>/<prev>__<upd>.json に後でまとめて書く
   const surfacePairs: Array<{ npm_pkg: string; prevVersion: string; updatedVersion: string; pre: any; post: any }> = [];
-  const dtsRecords: Array<{ libName: string; version: string; hasDts: boolean; coverage?: number; missing?: string[] }> = []; // .d.ts 妥当性検証（版ごと）
+  const dtsRecords: Array<{ libName: string; version: string } & DtsValidation> = []; // .d.ts 妥当性検証（版ごと）
   const excludedRecord = (pair: GroundTruthPair, reason: string, analyzability: Analyzability): DetectionRecord =>
     ({ ...pair, status: 'excluded', reason, analyzability, bcLoss: 'unevaluated', candidates: [] });
 
@@ -215,16 +216,22 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
     fs.writeFileSync(path.join(pairDir, 'diff.json'), JSON.stringify({ ...meta, ...diffSurfaceSymbols(s.pre, s.post) }, null, 2));
   }
 
-  // .d.ts 妥当性検証を audit へ（型定義がある版のみ coverage、無い版は hasDts:false を記録）
+  // .d.ts 妥当性検証を audit へ（型定義がある版だけを records に載せ、無い版は件数だけ）
   const auditDir = path.resolve(process.cwd(), AUDIT_DIR);
   OutputJson.createOutputDirectory(auditDir);
   const withDts = dtsRecords.filter(d => d.hasDts);
+  const measured = withDts.filter(d => d.coverage !== undefined); // 値 export が1件以上ある版
+  const declared = measured.reduce((n, d) => n + (d.dtsExportCount ?? 0), 0);
+  const captured = measured.reduce((n, d) => n + (d.matchedCount ?? 0), 0);
   const dtsSummary = {
     versionsChecked: dtsRecords.length,
     withDts: withDts.length,
-    withoutDts: dtsRecords.length - withDts.length,
-    avgCoverage: withDts.length ? +(withDts.reduce((n, d) => n + (d.coverage ?? 0), 0) / withDts.length).toFixed(3) : null,
-    records: dtsRecords,
+    withoutDts: dtsRecords.length - withDts.length, // 型定義の無い版（records に含めない）
+    measured: measured.length,
+    noValueExports: withDts.length - measured.length, // 型定義はあるが値 export が0件（coverage を付けない）
+    avgCoverage: measured.length ? +(measured.reduce((n, d) => n + d.coverage!, 0) / measured.length).toFixed(3) : null,
+    nameCoverage: { declared, captured, coverage: declared ? +(captured / declared).toFixed(3) : null }, // 名前単位（全版の合計）
+    records: withDts,
   };
   fs.writeFileSync(path.join(auditDir, 'dts_coverage.json'), JSON.stringify(dtsSummary, null, 2));
 

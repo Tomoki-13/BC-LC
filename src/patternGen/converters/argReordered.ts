@@ -1,5 +1,5 @@
 import type { TagConverter } from '../../types/patternTypes';
-import { usageCallPatterns, firstArgDivergence } from './shared';
+import { usageCallPatterns, firstArgDivergence, isInlineCall } from './shared';
 
 // detail "(a, b) → (b, a)" から pre/post の引数名列を取る（postSymbol が無い時のフォールバック）
 function paramsFromDetail(detail: string | undefined): { pre: string[]; post: string[] } | null {
@@ -26,5 +26,5 @@ export const convertArgReordered: TagConverter = (input) => {
   const post = input.postSymbol?.params ?? fromDetail?.post ?? [];
   const minArgs = pre.length > 0 ? firstArgDivergence(pre, post) + 1 : 2;
   const changedIndices = reorderedIndices(pre, post);
-  return usageCallPatterns(input).map(p => ({ ...p, argCheck: { minArgs, changedIndices } }));
+  return usageCallPatterns(input).filter(p => !isInlineCall(p)).map(p => ({ ...p, argCheck: { minArgs, changedIndices } }));
 };

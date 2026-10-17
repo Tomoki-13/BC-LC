@@ -1,7 +1,7 @@
 import type { ConverterInput, GeneratedPattern } from '../../types/patternTypes';
 import {
   objectBindings, namedBindings, namedAliasBindings,
-  memberCall, namedCall, directCall, newCall, interopDefaultCall,
+  memberCall, namedCall, directCall, newCall, interopDefaultCall, inlineMemberBinding,
 } from '../patternRegex';
 
 /** 候補から GeneratedPattern の共通メタを作る（tag/label/confidence は候補＝diffSurface の判定をそのまま使う） */
@@ -23,6 +23,11 @@ export function firstArgDivergence(pre: string[], post: string[]): number {
   let i = 0;
   while (i < post.length && pre[i] === post[i]) i++;
   return i;
+}
+
+/** binding のみで完結する require('lib').NAME(...) の呼び出しパターンか（引数個数を照合できない） */
+export function isInlineCall(p: GeneratedPattern): boolean {
+  return p.importForm === 'cjs-require-member-inline';
 }
 
 // 関数は残るが署名/挙動が変わったタグ共通: その関数の「呼び出し」を検出するパターン群
@@ -58,5 +63,8 @@ export function usageCallPatterns(input: ConverterInput): GeneratedPattern[] {
   for (const binding of namedAliasBindings(meta.libName, name)) {
     out.push({ ...meta, importForm: binding.form, calls: [binding.call, directCall()] });
   }
+  // require('lib').NAME(...) は1行で完結するため binding のみ（引数個数は見られないので argCheck を持つタグでは除く: isInlineCall）
+  const inline = inlineMemberBinding(meta.libName, name, 'call');
+  out.push({ ...meta, importForm: inline.form, calls: [inline.call] });
   return out;
 }

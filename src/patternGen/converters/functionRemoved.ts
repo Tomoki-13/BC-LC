@@ -1,12 +1,12 @@
 import type { GeneratedPattern, TagConverter } from '../../types/patternTypes';
 import {
-  objectBindings, namedBindings, namedAliasBindings,
+  objectBindings, namedBindings, namedAliasBindings, inlineMemberBinding,
   memberReference, directCall, newCall, interopDefaultCall,
 } from '../patternRegex';
 import { metaOf } from './shared';
 
 // function-removed: 消えた export 関数の使用を検出
-// default は直呼び/new/interop、名前付きは named import なら binding のみ・object 経由は member 参照
+// default は直呼び/new/interop、名前付きは named import / require('lib').NAME なら binding のみ・object 経由は member 参照
 export const convertFunctionRemoved: TagConverter = (input) => {
   const meta = metaOf(input);
   const { preSymbol } = input;
@@ -34,5 +34,7 @@ export const convertFunctionRemoved: TagConverter = (input) => {
   for (const binding of [...namedBindings(meta.libName, name), ...namedAliasBindings(meta.libName, name)]) {
     out.push({ ...meta, importForm: binding.form, calls: [binding.call] });
   }
+  const inline = inlineMemberBinding(meta.libName, name, 'access');
+  out.push({ ...meta, importForm: inline.form, calls: [inline.call] });
   return out;
 };

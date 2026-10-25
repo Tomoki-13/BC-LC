@@ -11,6 +11,18 @@ function resolveSymbol(candidate: LossCandidate, surface: ApiSurface | undefined
   return { name: candidate.symbol, kind: 'unknown', exportStyle: 'unknown', filePath: candidate.filePath };
 }
 
+// 同一の検出条件（タグ・記法・正規表現・照合条件が全て同じ）のパターンを1つにする（symbol は先に出た方を残す）
+// 例: 同じディレクトリから消えた複数ファイルがそれぞれ同じディレクトリ単位パターンを出す
+function dedupe(patterns: GeneratedPattern[]): GeneratedPattern[] {
+  const seen = new Set<string>();
+  return patterns.filter(p => {
+    const key = JSON.stringify([p.tag, p.importForm, p.calls.map(c => c.FunctionCallCode), p.argCheck, p.removedKey, p.env]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /**
  * 損失候補群を R-BC 形式の検出パターンへ変換する（patternGen の統括）
  *   入力: candidates（diffSurface の出力）/ preSurface / postSurface / 出力: {patterns, skipped}
@@ -42,5 +54,5 @@ export function generatePatterns(
     }
     patterns.push(...produced);
   }
-  return { patterns, skipped };
+  return { patterns: dedupe(patterns), skipped };
 }

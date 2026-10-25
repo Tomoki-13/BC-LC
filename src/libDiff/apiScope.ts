@@ -4,6 +4,7 @@ import traverseImport from '@babel/traverse';
 import * as t from '@babel/types';
 import { createAstFromContent } from '../astRelated/base/createAstFromFile';
 import type { ApiSurface, ApiSymbol, ScopeMode, ApiUsage } from '../types/LibDiff';
+import type { ApiScopeName } from '../utils/runVariant';
 
 const traverse = ((traverseImport as any).default ?? traverseImport) as typeof traverseImport;
 
@@ -55,10 +56,33 @@ function filterSurface(surface: ApiSurface, mode: ScopeMode, usage: ApiUsage): A
 }
 
 
+/** 2つの使用実態を合わせる（どちらかで使われていれば使用） */
+function mergeUsage(a: ApiUsage, b: ApiUsage): ApiUsage {
+  return {
+    named: new Set([...a.named, ...b.named]),
+    defaultUsed: a.defaultUsed || b.defaultUsed,
+    deepPaths: new Set([...a.deepPaths, ...b.deepPaths]),
+  };
+}
+
+/**
+ * 実行モードの API の範囲（runVariant の ApiScopeName）で surface を絞る。checkout 済みの版ツリーで呼ぶ
+ *   all = 絞らない / doc = 全 .md の語 / test = テストの import / doctest = その両方
+ *   絞るのは symbols だけ（engines・type・files・exports 由来の損失は名前に関係しないので全範囲で残る）
+ */
+function scopeSurface(surface: ApiSurface, repoDir: string, libName: string, scope: ApiScopeName): ApiSurface {
+  if (scope === 'all') return surface;
+  const usage = scope === 'doc' ? collectDocTokens(repoDir, false)
+    : scope === 'test' ? collectTestUsage(repoDir, libName)
+      : mergeUsage(collectDocTokens(repoDir, false), collectTestUsage(repoDir, libName));
+  return filterSurface(surface, 1, usage);
+}
+
 export default {
   collectTestUsage,
   collectDocTokens,
   filterSurface,
+  scopeSurface,
 };
 
 const emptyUsage = (): ApiUsage => ({ named: new Set(), defaultUsed: false, deepPaths: new Set() });

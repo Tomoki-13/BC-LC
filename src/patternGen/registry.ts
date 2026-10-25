@@ -13,6 +13,8 @@ import { convertExportStyleChanged } from './converters/exportStyleChanged';
 import { convertOptionRemoved } from './converters/optionRemoved';
 import { convertModuleFormatChanged } from './converters/moduleFormatChanged';
 import { convertNodeNpmRequirementRaised } from './converters/nodeNpmRequirementRaised';
+import { convertPublishedFileMissing } from './converters/publishedFileMissing';
+import { convertExportsRestricted } from './converters/exportsRestricted';
 
 /**
  * ChangeTag → パターン変換器の対応表（LOSS_TAGS を全て登録）
@@ -32,4 +34,6 @@ export const CONVERTERS: Partial<Record<ChangeTag, TagConverter>> = {
   'option-removed': convertOptionRemoved,
   'module-format-changed': convertModuleFormatChanged,
   'node-npm-requirement-raised': convertNodeNpmRequirementRaised,
+  'published-file-missing': convertPublishedFileMissing,
+  'exports-restricted': convertExportsRestricted,
 };

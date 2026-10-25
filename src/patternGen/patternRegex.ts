@@ -71,8 +71,10 @@ export function subpathBindings(libName: string, subpath: string): BindingPart[]
 const CALL_TAIL = `([^)]*)${CHAIN_GUARD}`;
 
 /**
- * 別名付きの名前束縛（import { NAME as v1 } / const { NAME: v1 } = require）。usage は捕捉した variable1 を参照
- * 入力: libName / name / 出力: {form, binding}[]（esm-named-alias / cjs-destructure-alias）
+ * 名前 NAME そのものを変数に束縛する形（import { NAME as v1 } / const { NAME: v1 } = require / v1 = require('lib').NAME）。
+ * usage は捕捉した variable1 を参照
+ * 入力: libName / name / 出力: {form, binding}[]（esm-named-alias / cjs-destructure-alias / cjs-require-member）
+ *   cjs-require-member は require 直後のメンバ1段だけを許し、その先のチェーン（require('lib').NAME.x）は CHAIN_GUARD で除く
  */
 export function namedAliasBindings(libName: string, name: string): BindingPart[] {
   const lib = escapeLiteral(libName);
@@ -81,7 +83,61 @@ export function namedAliasBindings(libName: string, name: string): BindingPart[]
   return [
     { form: 'esm-named-alias',       call: makeCall(`import \\{[^}]*\\b${target}\\s+as\\s+${bound}[^}]*\\} from ${QUOTE}${lib}${QUOTE}${CHAIN_GUARD}`) }, // 例: import { name as v1 } from 'lib'
     { form: 'cjs-destructure-alias', call: makeCall(`\\{[^}]*\\b${target}\\s*:\\s*${bound}[^}]*\\} = require(${QUOTE}${lib}${QUOTE})${CHAIN_GUARD}`) }, // 例: const { name: v1 } = require('lib')
+    { form: 'cjs-require-member',    call: makeCall(`${bound} = require(${QUOTE}${lib}${QUOTE})\\.${target}\\b${CHAIN_GUARD}`) }, // 例: const v1 = require('lib').name
   ];
+}
+
+/**
+ * 変数に束縛せず require の直後でメンバを使う形（binding のみで完結）
+ *   access: require('lib').NAME の参照（削除系タグ用。参照した時点で壊れる）
+ *   call  : require('lib').NAME(...) の呼び出し（呼び出し系タグ用）
+ * 入力: libName / name / 出力: {form, binding}
+ */
+export function inlineMemberBinding(libName: string, name: string, kind: 'access' | 'call'): BindingPart {
+  const head = `require(${QUOTE}${escapeLiteral(libName)}${QUOTE})\\.${escapeLiteral(name)}`;
+  return kind === 'access'
+    ? { form: 'cjs-require-member-inline', call: makeCall(`${head}\\b`) }  // 例: foo(require('lib').name)
+    : { form: 'cjs-require-member-inline', call: makeCall(`${head}(`) };    // 例: require('lib').name(arg)
+}
+
+/**
+ * 指定子（正規表現の部品・クォート込み）を読み込む全ての記法（binding のみ・変数を捕捉しない）
+ *   require は閉じ括弧を要求しない＝ require('lib', 'alias')（lazy-cache）や require('lib').x も含む
+ * 入力: spec（例 QUOTE+lib+QUOTE）/ 出力: {form, binding}[]
+ */
+function anyImportOf(spec: string): BindingPart[] {
+  return [
+    { form: 'require-any',        call: makeCall(`require(${spec}`) },   // 例: require('lib') / require('lib', 'x') / require('lib').x
+    { form: 'esm-from-any',       call: makeCall(`from ${spec}`) },      // 例: import x from 'lib' / export { x } from 'lib'
+    { form: 'esm-bare-any',       call: makeCall(`import ${spec}`) },    // 例: import 'lib'
+    { form: 'dynamic-import-any', call: makeCall(`import(${spec}`) },    // 例: import('lib')
+  ];
+}
+
+/** ライブラリ本体（サブパスでない 'lib'）の読み込み全般。読み込んだ時点で壊れる損失（published-file-missing）用 */
+export function anyRootImportBindings(libName: string): BindingPart[] {
+  return anyImportOf(`${QUOTE}${escapeLiteral(libName)}${QUOTE}`);
+}
+
+/**
+ * ディレクトリ lib/dir 配下（lib/dir 自身を含む）の読み込み全般。ディレクトリごと消えた deep import 用
+ *   (?!…) で lib/dirX のような別名ディレクトリを除く
+ */
+export function subpathDirBindings(libName: string, dir: string): BindingPart[] {
+  return anyImportOf(`${QUOTE}${escapeLiteral(`${libName}/${dir}`)}(?![^/"'\`])[^"'\`]*${QUOTE}`);
+}
+
+/**
+ * lib/<サブパス> の読み込みのうち、allowed（package.json exports のキー）に無いものすべて（exports 新設で壊れる deep import）
+ *   exports のキーは完全一致で照合される（'./v4' を公開していても 'lib/v4.js' は読めない）。'./x/*' は x/ 配下を許す
+ *   否定先読みを並べて許可分を除く: lib/(?!v4["'`])(?!x/)[^"'`]+
+ */
+export function subpathExceptBindings(libName: string, allowed: string[]): BindingPart[] {
+  const rel = allowed.filter(a => a !== '.').map(a => a.replace(/^\.\//, ''));
+  const guards = rel.map(a => (a.endsWith('/*')
+    ? `(?!${escapeLiteral(a.slice(0, -1))})`
+    : `(?!${escapeLiteral(a)}${QUOTE})`)).join('');
+  return anyImportOf(`${QUOTE}${escapeLiteral(libName)}/${guards}[^"'\`]+${QUOTE}`);
 }
 
 /** variable1 のメンバ name を参照する使用（呼び出しに限らない＝削除された関数/値の参照検出）。入力: name / 出力: usage 要素 */

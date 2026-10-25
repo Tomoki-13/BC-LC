@@ -4,7 +4,7 @@ import { execSync } from 'child_process';
 
 import OutputJson from '../utils/output_json';
 import {
-  PATTERNS_PATH, RECORDS_PATH, SURFACE_DIR, ANALYSIS_DIR, AUDIT_DIR, CLONE_BASE,
+  PATTERNS_PATH, RECORDS_PATH, SURFACE_DIR, ANALYSIS_DIR, AUDIT_DIR, EXTRACTION_COVERAGE_DIR, CLONE_BASE,
   toCsvCell, toDirName, PatternRecord, DetectionRecord,
 } from '../utils/evalShared';
 import DiffSurface, { deriveSubpath } from '../libDiff/diffSurface';
@@ -12,7 +12,7 @@ import type { ApiSurface, ApiSymbol } from '../types/LibDiff';
 
 // 損失と判定した API（＝パターン化した API。損失候補1件ごとにパターンを作るため一致する）を版ペアごとに列挙する（DIAGNOSE 等の既存手法との突き合わせ用）。
 //   入力: library-detect/records.json（損失候補）・patterns/patterns.json（生成パターン）・surface/（公開形）
-//         audit/resolution_log.csv＋lib clone の package.json（main＝ライブラリ本体のファイル）・audit/dts_coverage.json（任意）
+//         audit/resolution_log.csv＋lib clone の package.json（main＝ライブラリ本体のファイル）・results/extraction-coverage/dts_coverage.json（任意）
 //   出力: analysis/capturedSymbols/{loss_api_list.csv, by_lib.json, dts_gap.csv, summary.json}
 //   API の表記は DIAGNOSE（supplementary/detected_breaking_changes.csv の related_apis）に合わせる:
 //     本体の default export → <lib> / 本体の名前付き export・プロパティ → <lib>.name
@@ -178,7 +178,7 @@ export function runCapturedSymbols(): void {
   fs.writeFileSync(path.join(outDir, 'by_lib.json'), JSON.stringify(byLib, null, 2));
 
   // dts_gap.csv（.d.ts 宣言のうち surface が捕捉できなかったもの）
-  const dts = readJson(path.resolve(process.cwd(), AUDIT_DIR, 'dts_coverage.json'));
+  const dts = readJson(path.resolve(process.cwd(), EXTRACTION_COVERAGE_DIR, 'dts_coverage.json'));
   const dtsGap = ((dts?.records ?? []) as DtsRecord[]).filter(d => d.hasDts && d.missing && d.missing.length > 0);
   const dtsRows = ['lib,version,coverage,missingCount,missing'];
   for (const g of dtsGap) {

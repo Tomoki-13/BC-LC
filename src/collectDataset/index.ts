@@ -28,7 +28,7 @@ import {
   fetchVersionMeta,
   resolvePreviousVersion,
   extractRepositoryUrl,
-} from './npm/registry';
+} from '../utils/npmRegistry';
 import { searchRepositories } from './github/searchRepositories';
 import { DEFAULT_QUALITY, type QualityCriteria } from './github/repoQuality';
 import { cloneLibVersions } from './lib/cloneLibVersions';

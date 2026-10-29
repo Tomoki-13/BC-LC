@@ -17,17 +17,6 @@ export interface CollectConfig {
   includePrerelease?: boolean;
 }
 
-/** npm registry から解決したバージョン情報 */
-export interface ResolvedVersions {
-  libraryName: string;
-  /** 更新後（= targetVersion を正規化したもの） */
-  postVersion: string;
-  /** 更新前（registry 上で post の直前に公開された版） */
-  preVersion: string;
-  /** semver 昇順に並べた候補バージョン一覧 */
-  candidateVersions: string[];
-}
-
 /** 収集対象として採用したクライアント */
 export interface ClientHit {
   /** owner/repo */

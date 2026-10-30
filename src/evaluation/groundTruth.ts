@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import OutputJson from '../utils/output_json';
-import { EVAL_DIR, toCsvCell } from '../utils/evalShared';
+import { GROUND_TRUTH_DIR, toCsvCell } from '../utils/evalShared';
 
 const PROPOSAL = '../../datasets/proposal_result.json';
 
@@ -37,7 +37,7 @@ export function runGroundTruth(): void {
       succCount: e.stats?.success ?? 0,
     }));
 
-  const outDir = path.resolve(process.cwd(), EVAL_DIR);
+  const outDir = path.resolve(process.cwd(), GROUND_TRUTH_DIR);
   OutputJson.createOutputDirectory(outDir);
 
   // JSON

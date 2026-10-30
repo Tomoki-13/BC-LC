@@ -6,10 +6,11 @@ import OutputJson from '../utils/output_json';
 import DiffSurface from '../libDiff/diffSurface';
 import LibRepo from '../libDiff/libRepo';
 import ApiScope from '../libDiff/apiScope';
+import { runGroundTruth } from './groundTruth';
 import type { ScopeMode, ApiUsage, ApiSurface } from '../types/LibDiff';
 import { extractRepositoryUrl } from '../utils/npmRegistry';
 import {
-  CLONE_BASE, EVAL_DIR, toDirName,
+  CLONE_BASE, GROUND_TRUTH_PATH, SCOPE_COMPARE_DIR, toDirName,
   loadGroundTruth, groupByLib, fetchPackument, computeMetrics, buildSurfaceForVersion, emptyUsage,
 } from '../utils/evalShared';
 
@@ -30,6 +31,7 @@ const usageForMode = (data: VersionData, mode: ScopeMode): ApiUsage =>
 
 /** 外部API絞り込みモード0/1/2/3 ごとに P2 の損失判定精度を比較し scope_compare.json を出力 */
 export async function runScopeCompare(maxLibs: number = Infinity): Promise<void> {
+  if (!fs.existsSync(path.resolve(process.cwd(), GROUND_TRUTH_PATH))) runGroundTruth(); // モードのフォルダに無ければ作る
   const pairsByLib = groupByLib(loadGroundTruth());
   const libNames = [...pairsByLib.keys()].slice(0, maxLibs);
 
@@ -94,7 +96,7 @@ export async function runScopeCompare(maxLibs: number = Infinity): Promise<void>
 
   const modeRows = MODES.map(mode => ({ mode: MODE_LABEL[mode], ...confusionByMode[mode], ...computeMetrics(confusionByMode[mode]) }));
   const summary = { analyzable, unavailable, modes: modeRows };
-  const outputDir = path.resolve(process.cwd(), EVAL_DIR);
+  const outputDir = path.resolve(process.cwd(), SCOPE_COMPARE_DIR);
   OutputJson.createOutputDirectory(outputDir);
   fs.writeFileSync(path.join(outputDir, 'scope_compare.json'), JSON.stringify(summary, null, 2));
   console.log(`analyzable=${analyzable} unavailable=${unavailable}`);

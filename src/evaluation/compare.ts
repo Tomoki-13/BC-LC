@@ -4,7 +4,7 @@ import path from 'path';
 
 import OutputJson from '../utils/output_json';
 import {
-  EVAL_DIR, DetectionRecord, toCsvCell, loadRecords, computeMetrics,
+  LOSS_JUDGEMENT_DIR, LOSS_DISCUSSION_DIR, DetectionRecord, toCsvCell, loadRecords, computeMetrics,
 } from '../utils/evalShared';
 
 // 採点済み1ペア（各 CSV の1行。records の検出事実に正解ラベルを突き合わせた結果）
@@ -82,8 +82,11 @@ export function runCompare(): void {
     metrics,
   };
 
-  const outputDir = path.resolve(process.cwd(), EVAL_DIR);
+  // 結果（混同行列・版ペアごとの判定）は results/、考察の材料（除外した版ペア・タグ別 TP/FP）は discussion/
+  const outputDir = path.resolve(process.cwd(), LOSS_JUDGEMENT_DIR);
+  const discussionDir = path.resolve(process.cwd(), LOSS_DISCUSSION_DIR);
   OutputJson.createOutputDirectory(outputDir);
+  OutputJson.createOutputDirectory(discussionDir);
   fs.writeFileSync(path.join(outputDir, 'compare_summary.json'), JSON.stringify(summary, null, 2));
 
   // 評価用 CSV（評価できたペア: test_result / 本手法の損失有無 / 原因）
@@ -94,7 +97,7 @@ export function runCompare(): void {
 
   // 除外 CSV（評価できなかったペアと理由）
   const excludedHeader = 'npm_pkg,prevVersion,updatedVersion,test_result,reason\n';
-  fs.writeFileSync(path.join(outputDir, 'excluded_pairs.csv'), excludedHeader + excludedRows.map(row =>
+  fs.writeFileSync(path.join(discussionDir, 'excluded_pairs.csv'), excludedHeader + excludedRows.map(row =>
     [row.npm_pkg, row.prevVersion, row.updatedVersion, row.state, row.reason].map(toCsvCell).join(','),
   ).join('\n'));
 
@@ -109,7 +112,7 @@ export function runCompare(): void {
   const distributionRows = Object.entries(tagStats)
     .map(([tag, s]) => ({ tag, tp: s.tp, fp: s.fp, total: s.tp + s.fp, precision: +(s.tp / (s.tp + s.fp)).toFixed(3) }))
     .sort((a, b) => b.total - a.total);
-  fs.writeFileSync(path.join(outputDir, 'label_distribution.csv'), 'tag,TP,FP,total,precision\n' +
+  fs.writeFileSync(path.join(discussionDir, 'label_distribution.csv'), 'tag,TP,FP,total,precision\n' +
     distributionRows.map(d => [d.tag, d.tp, d.fp, d.total, d.precision].join(',')).join('\n'));
 
   // 素の判定（後方互換）
@@ -119,7 +122,7 @@ export function runCompare(): void {
   ).join('\n'));
 
   console.log(JSON.stringify(summary, null, 2));
-  console.log(`[Done] eval=${outputDir}`);
+  console.log(`[Done] loss-judgement=${outputDir}・discussion=${discussionDir}`);
 }
 
 // CLI 直接実行時のみ走らせる（import 時は走らせない）

@@ -12,11 +12,14 @@ import { extractRepositoryUrl } from '../utils/npmRegistry';
 import { diffDeps } from '../depImpact/depDiff';
 import { generatePatterns } from '../patternGen/generatePatterns';
 import {
-  CLONE_BASE, LIBRARY_DETECT_DIR, PATTERNS_DIR, SURFACE_DIR, AUDIT_DIR, GroundTruthPair, DetectionRecord, LossCandidate,
+  CLONE_BASE, GROUND_TRUTH_PATH, LIBRARY_DETECT_DIR, PATTERNS_DIR, SURFACE_DIR, AUDIT_DIR, EXTRACTION_COVERAGE_DIR, GroundTruthPair, DetectionRecord, LossCandidate,
   PatternRecord, toDirName, loadGroundTruth, groupByLib, fetchPackument,
   ExcludeReason, Analyzability, classifyAnalyzability,
 } from '../utils/evalShared';
 import type { DtsValidation } from '../types/LibDiff';
+import ApiScope from '../libDiff/apiScope';
+import { runGroundTruth } from './groundTruth';
+import { RUN_SCOPE } from '../utils/runVariant';
 
 // 1バージョンの surface 取得結果（reason で「なぜ評価不能か」を表す）
 interface SurfaceResult {
@@ -53,15 +56,17 @@ function diffSurfaceSymbols(pre: any, post: any): {
 /**
  * ground_truth 全ペアに P2 検出（clone→surface→diff）を1回だけ実行し，
  * 損失候補を records.json に書き出す。採点(compare)/分析(analysis)はこの出力を読むだけ
- *   入力: maxLibs（先頭N libのパイロット用。既定=全件）
- *   出力: library-detect/records.json（DetectionRecord 配列＝損失有無）
- *        patterns/patterns.json（PatternRecord 配列＝R-BC 形式の検出パターン。client-detect の照合入力）
- *        audit/ に解決ログ
+ *   入力: maxLibs（先頭N libのパイロット用。既定=全件）。API の範囲は実行モード（runVariant の RUN_SCOPE）
+ *   出力: work/library-detect/records.json（DetectionRecord 配列＝損失有無）
+ *        work/patterns/patterns.json（PatternRecord 配列＝R-BC 形式の検出パターン。client-detect の照合入力）
+ *        work/surface/（判定に使った surface）・results/extraction-coverage/dts_coverage.json・audit/ に解決ログ
  */
 export async function runDetection(maxLibs: number = Infinity): Promise<void> {
   phase('judge+generate');
   const logger = new RunLogger(); // バージョン解決手段・警告・エラーを監査ファイルに残す
 
+  // 正解ラベルはモードのフォルダごとに置くので、無ければ先に作る（make detect を単独で走らせたとき）
+  if (!fs.existsSync(path.resolve(process.cwd(), GROUND_TRUTH_PATH))) runGroundTruth();
   // 同じ lib は1回だけ clone し surface を共有するため lib 単位でまとめる
   const pairsByLib = groupByLib(loadGroundTruth());
   const libNames = [...pairsByLib.keys()].slice(0, maxLibs);
@@ -125,9 +130,11 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
         }
         try {
           LibRepo.checkoutVersion(repoDir, commitRef);
-          const surface = await ApiSurface.buildApiSurface(repoDir, version, commitRef);
-          dtsRecords.push({ libName, version, ...(surface.dtsValidation ?? { hasDts: false }) }); // .d.ts 妥当性検証（抽出の網羅性）
-          if (surface.symbols.length === 0) {
+          const fullSurface = await ApiSurface.buildApiSurface(repoDir, version, commitRef);
+          dtsRecords.push({ libName, version, ...(fullSurface.dtsValidation ?? { hasDts: false }) }); // .d.ts 妥当性検証（抽出の網羅性・範囲で絞る前）
+          // 実行モードの API の範囲で絞った surface を判定と生成に使う（抽出できたかは絞る前で見る）
+          const surface = ApiScope.scopeSurface(fullSurface, repoDir, libName, RUN_SCOPE);
+          if (fullSurface.symbols.length === 0) {
             logger.warn(libName, version, 'surface', `export 関数が0件（抽出漏れ/ビルド成果物未コミット等）ref=${commitRef.slice(0, 12)}`);
             result = { surface, reason: 'empty' };
           } else {
@@ -216,9 +223,11 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
     fs.writeFileSync(path.join(pairDir, 'diff.json'), JSON.stringify({ ...meta, ...diffSurfaceSymbols(s.pre, s.post) }, null, 2));
   }
 
-  // .d.ts 妥当性検証を audit へ（型定義がある版だけを records に載せ、無い版は件数だけ）
+  // .d.ts 妥当性検証を results/extraction-coverage へ（型定義がある版だけを records に載せ、無い版は件数だけ）
   const auditDir = path.resolve(process.cwd(), AUDIT_DIR);
   OutputJson.createOutputDirectory(auditDir);
+  const coverageDir = path.resolve(process.cwd(), EXTRACTION_COVERAGE_DIR);
+  OutputJson.createOutputDirectory(coverageDir);
   const withDts = dtsRecords.filter(d => d.hasDts);
   const measured = withDts.filter(d => d.coverage !== undefined); // 値 export が1件以上ある版
   const declared = measured.reduce((n, d) => n + (d.dtsExportCount ?? 0), 0);
@@ -233,7 +242,7 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
     nameCoverage: { declared, captured, coverage: declared ? +(captured / declared).toFixed(3) : null }, // 名前単位（全版の合計）
     records: withDts,
   };
-  fs.writeFileSync(path.join(auditDir, 'dts_coverage.json'), JSON.stringify(dtsSummary, null, 2));
+  fs.writeFileSync(path.join(coverageDir, 'dts_coverage.json'), JSON.stringify(dtsSummary, null, 2));
 
   logger.flush(auditDir, 'runDetection'); // 監査ログは audit/ へ
   const evaluated = records.filter(r => r.status === 'evaluated').length;
@@ -241,7 +250,7 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
   console.log(`[Done] records=${records.length} (evaluated=${evaluated}, excluded=${records.length - evaluated}) → ${outputDir}/records.json`);
   console.log(`[Done] patterns=${totalPatterns} (pairs=${patternRecords.length}) → ${patternsDir}/patterns.json`);
   console.log(`[Done] surface=${surfacePairs.length} pairs → ${surfaceDir}/<lib>/<postver>/{pre,post,diff}.json`);
-  console.log(`[Done] dts: ${withDts.length}/${dtsRecords.length} 版に型定義あり (avgCoverage=${dtsSummary.avgCoverage}) → ${auditDir}/dts_coverage.json`);
+  console.log(`[Done] dts: ${withDts.length}/${dtsRecords.length} 版に型定義あり (avgCoverage=${dtsSummary.avgCoverage}) → ${coverageDir}/dts_coverage.json`);
 }
 
 // CLI 直接実行時のみ走らせる（import 時は走らせない）

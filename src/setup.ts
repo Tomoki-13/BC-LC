@@ -10,7 +10,7 @@ import { initRunLog, phase, logEvent } from './utils/runLog';
 
 // 本実行の前に一度だけ走らせる前処理エントリ
 //   ここで全ての前処理を終わらせてから make run / make client-detect に進む。
-//   前処理: (1) パターン生成の版ペア targets.all.json を生成 → (2) 検出入力 client_detect_clients.json を生成 → (3) 不足クライアントを clonedata に clone。
+//   前処理: (1) パターン生成の版ペア targets.all.json を生成 → (2) 検出入力 client_detect_clients.json を生成 → (3) クライアントを clonedata に clone し、テストしたときのコミットにそろえる。
 //   実行: cd src && npx tsx setup.ts  （make setup）
 
 const PROPOSAL_PATH = '../../datasets/proposal_result.json';
@@ -41,8 +41,8 @@ async function main(): Promise<void> {
   phase('prepare-clients');
   await runPrepareClients();
 
-  // 3) 検出入力に載るクライアントのうち clonedata に無いものを clone（既存はスキップ）
-  console.log('[setup] (3/3) 不足クライアントを clonedata/clientRepos に clone');
+  // 3) 検出入力に載るクライアントを clone し、既存も含めてテストしたときのコミット（commitId）に checkout する
+  console.log('[setup] (3/3) クライアントを clonedata/clientRepos に clone・commitId にそろえる');
   await runCloneClients();
 
   console.log('[setup] 完了。以降は make run / make client-detect を実行できます');

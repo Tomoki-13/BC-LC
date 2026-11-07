@@ -8,17 +8,12 @@
 
 import fs from 'fs';
 import path from 'path';
+import { githubAuthEnv, githubCloneUrl } from '../../utils/gitAuth';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
-/** 認証付き URL（token があれば付与） */
-function authedUrl(fullName: string, token: string | undefined): string {
-  return token
-    ? `https://x-access-token:${token}@github.com/${fullName}.git`
-    : `https://github.com/${fullName}.git`;
-}
 
 /** ディレクトリが存在し、かつ空でない（中身がある）か */
 export function hasContent(dir: string): boolean {
@@ -59,8 +54,9 @@ export async function cloneClient(
   try {
     fs.mkdirSync(path.dirname(dir), { recursive: true });
     const depth = shallow ? '--depth 1' : '';
-    await execAsync(`git clone ${depth} "${authedUrl(fullName, token)}" "${dir}"`, {
+    await execAsync(`git clone ${depth} "${githubCloneUrl(fullName)}" "${dir}"`, {
       maxBuffer: 64 * 1024 * 1024,
+      env: githubAuthEnv(token),
     });
     return { fullName, dir, status: 'cloned' };
   } catch (e) {

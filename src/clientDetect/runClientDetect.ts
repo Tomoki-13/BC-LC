@@ -102,7 +102,7 @@ function linkOf(imported: boolean, via: string | null, depChecked: boolean): Lib
   return via.startsWith('package.json:') ? 'declared_not_imported' : via.startsWith('lockfile:') ? 'lockfile_only' : 'transitive';
 }
 
-/** クライアント1件の補足情報（検出には使わない。目視・結果の説明用） */
+/** クライアント1件の補足情報（検出には使わない。確認用） */
 interface ClientDetail {
   client: string;
   detected: boolean;
@@ -374,7 +374,7 @@ interface ClientDetailRow extends ClientDetail {
 }
 
 /**
- * クライアントごとの補足情報を書く（検出には使わない。目視・結果の説明用）
+ * クライアントごとの補足情報を書く（検出には使わない。確認用）
  *   clients_detail.csv    : 1行 = 群 × 版ペア × クライアント（クライアント名つき）
  *   supplement_counts.csv : 群 × 項目 × 値 ごとの件数（detected / not_detected の内訳つき）
  */

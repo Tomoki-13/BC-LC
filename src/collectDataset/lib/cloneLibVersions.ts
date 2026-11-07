@@ -10,17 +10,11 @@ import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { githubAuthEnv, githubCloneUrl } from '../../utils/gitAuth';
 import type { ChangedFile, LibDiffResult } from '../types';
 
 const execAsync = promisify(exec);
 
-/** 認証付き URL（token があれば付与） */
-function authedUrl(repoUrl: string, token: string | undefined): string {
-  if (!token) return `${repoUrl}.git`;
-  const m = repoUrl.match(/^https:\/\/github\.com\/(.+)$/);
-  if (!m) return `${repoUrl}.git`;
-  return `https://x-access-token:${token}@github.com/${m[1]}.git`;
-}
 
 /** version に対応する実在タグを解決（v<ver> → <ver> の順で試す） */
 async function resolveTag(repoDir: string, version: string): Promise<string | null> {
@@ -60,12 +54,12 @@ export async function cloneLibVersions(
   if (!fs.existsSync(repoDir)) {
     fs.mkdirSync(path.dirname(repoDir), { recursive: true });
     console.log(`  [Clone] ${repoUrl} → ${repoDir}`);
-    await execAsync(`git clone "${authedUrl(repoUrl, token)}" "${repoDir}"`);
+    await execAsync(`git clone "${githubCloneUrl(repoUrl)}" "${repoDir}"`, { env: githubAuthEnv(token) });
   } else {
     console.log(`  [Clone] 既存を再利用: ${repoDir}`);
   }
   // タグを最新化
-  await execAsync('git fetch --tags --quiet', { cwd: repoDir }).catch(() => {});
+  await execAsync('git fetch --tags --quiet', { cwd: repoDir, env: githubAuthEnv(token) }).catch(() => {});
 
   // 2) タグ解決
   const preTag = await resolveTag(repoDir, preVersion);

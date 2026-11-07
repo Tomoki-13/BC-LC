@@ -92,6 +92,12 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
   // <exportRoot>.prop = 関数/識別子 （uuid.v4 = v4 のようなプロパティ公開）を後段で解決するため収集
   const propAssignments: { objName: string; prop: string; funcNode: any | null; valueName: string | null }[] = [];
 
+  // module.exports / exports（モジュール本体の代入先）
+  const isModuleExportsTarget = (node: any): boolean =>
+    t.isIdentifier(node, { name: 'exports' })
+    || (t.isMemberExpression(node) && !node.computed
+      && t.isIdentifier(node.object, { name: 'module' }) && t.isIdentifier(node.property, { name: 'exports' }));
+
   try {
     if (!filePath.match(/\.(js|jsx|ts|tsx|mjs|cjs|mts|cts)$/)) return [];
 
@@ -240,6 +246,17 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
               filePath, start: path.node.declaration.start, end: path.node.declaration.end,
             });
           }
+        } else if (t.isFunctionDeclaration(path.node.declaration) || t.isArrowFunctionExpression(path.node.declaration)
+          || t.isFunctionExpression(path.node.declaration)) {
+          // export default function () {} / export default () => …（無名 default）
+          const fn = path.node.declaration;
+          if (!resultArray.some(f => f.name === 'default' && f.start === fn.start)) {
+            resultArray.push({
+              name: 'default', isExported: true, arg: getParams(fn.params),
+              returnExprs: getReturnExpressionsFromFunctionNode(fn, fileContent),
+              filePath, start: fn.start, end: fn.end,
+            });
+          }
         } else if (t.isIdentifier(path.node.declaration)) {
           explicitlyExportedNames.add(path.node.declaration.name);
         } else if (t.isObjectExpression(path.node.declaration)) {
@@ -271,7 +288,17 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
 
       AssignmentExpression(path) {
         const left = path.node.left;
-        const right = path.node.right;
+        let right = path.node.right;
+
+        // module.exports = X = function () {}（連鎖代入）: 右端の値と、間の識別子 X を公開の実体として扱う
+        //   例: es6-symbol 0.1.1 polyfill.js `module.exports = Symbol = function (description) {…}`
+        let chainedName: string | null = null;
+        if (isModuleExportsTarget(left)) {
+          while (t.isAssignmentExpression(right) && t.isIdentifier(right.left)) {
+            if (right.left.name !== 'exports') chainedName = right.left.name; // module.exports = exports = X の exports は名前にしない
+            right = right.right;
+          }
+        }
 
         // module.exports = { a: funcA, b: { c: funcC } } のネスト解析
         if (t.isObjectExpression(right)) {
@@ -292,7 +319,7 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
             (t.isMemberExpression(left) && !left.computed
               && t.isIdentifier(left.object, { name: 'module' }) && t.isIdentifier(left.property, { name: 'exports' }));
           if (isModuleExportsDefault) {
-            const fnName = (t.isFunctionExpression(right) && right.id?.name) ? right.id.name : 'default';
+            const fnName = chainedName ?? ((t.isFunctionExpression(right) && right.id?.name) ? right.id.name : 'default');
             if (!resultArray.some(f => f.name === fnName && f.start === right.start)) {
               resultArray.push({
                 name: fnName,
@@ -483,6 +510,11 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
     const asyncOptByStart = new Map<number, { isAsync: boolean; optionKeys: string[] }>();
     const styleByName = new Map<string, ExportStyleTag>();
     const kindByName = new Map<string, SymbolKindTag>();
+    // クラスの宣言（名前 → ノード）と、default で公開される名前（値は直接のクラス式／宣言・識別子なら null で後から classNodes を引く）
+    const classNodes = new Map<string, any>();
+    const defaultClasses = new Map<string, any>();
+    // default で公開される名前（後から exports.X = X で cjs-property に上書きされても残す。例 internal-ip: module.exports = v4; module.exports.v4 = v4）
+    const defaultNames = new Map<string, ExportStyleTag>();
     traverse(parsed, {
       enter(p) {
         const n: any = p.node;
@@ -502,38 +534,83 @@ export const getFunction = async (filePath: string, mode = 0): Promise<ExtendedF
         }
         for (const s of n.specifiers) if (t.isExportSpecifier(s) && t.isIdentifier(s.exported)) styleByName.set(s.exported.name, style);
       },
+      ClassDeclaration(p) {
+        if (p.node.id) classNodes.set(p.node.id.name, p.node);
+      },
+      VariableDeclarator(p) {
+        const { id, init } = p.node;
+        if (t.isIdentifier(id) && t.isClassExpression(init)) classNodes.set(id.name, init);
+      },
       ExportDefaultDeclaration(p) {
         const d: any = p.node.declaration;
-        const name = (t.isFunctionDeclaration(d) || t.isClassDeclaration(d)) && d.id ? d.id.name : 'default';
+        // export default Id は Id が公開の実体（例: array-union 3.0.0 `const arrayUnion = (…) => …; export default arrayUnion;`）
+        const name = t.isIdentifier(d) ? d.name
+          : (t.isFunctionDeclaration(d) || t.isClassDeclaration(d)) && d.id ? d.id.name : 'default';
         styleByName.set(name, 'esm-default');
-        if (t.isClassDeclaration(d)) kindByName.set(name, 'class');
+        defaultNames.set(name, 'esm-default');
+        if (t.isClassDeclaration(d)) {
+          kindByName.set(name, 'class');
+          defaultClasses.set(name, d);
+        } else if (t.isIdentifier(d)) {
+          defaultClasses.set(name, null);
+        }
       },
       AssignmentExpression(p) {
-        const { left, right } = p.node as any;
+        const { left } = p.node as any;
+        let right: any = (p.node as any).right;
         if (!t.isMemberExpression(left) || left.computed) return;
         const isModuleExports = t.isIdentifier(left.object, { name: 'module' }) && t.isIdentifier(left.property, { name: 'exports' });
         const isExportsProp = t.isIdentifier(left.object, { name: 'exports' }) && t.isIdentifier(left.property);
         const isModuleExportsProp = t.isMemberExpression(left.object) && !left.object.computed
           && t.isIdentifier(left.object.object, { name: 'module' }) && t.isIdentifier(left.object.property, { name: 'exports' }) && t.isIdentifier(left.property);
         if (isModuleExports) {
+          // 連鎖代入 module.exports = X = … の X（pass1 と同じ規則）
+          let chainedName: string | null = null;
+          while (t.isAssignmentExpression(right) && t.isIdentifier(right.left)) {
+            if (right.left.name !== 'exports') chainedName = right.left.name; // module.exports = exports = X の exports は名前にしない
+            right = right.right;
+          }
           if (t.isObjectExpression(right)) {
             for (const pr of right.properties) if (t.isObjectProperty(pr) && !pr.computed && t.isIdentifier(pr.key)) styleByName.set(pr.key.name, 'cjs-property');
           } else {
-            const name = t.isIdentifier(right) ? right.name : 'default';
+            // 公開の実体の名前: 識別子 → その名前／名前つきの関数式・クラス式 → その名前（例: `module.exports = function serialize () {}`）
+            const name = chainedName
+              ?? (t.isIdentifier(right) ? right.name
+                : (t.isFunctionExpression(right) || t.isClassExpression(right)) && right.id ? right.id.name : 'default');
             styleByName.set(name, 'cjs-module-default');
-            if (t.isClassExpression(right)) kindByName.set(name, 'class');
+            defaultNames.set(name, 'cjs-module-default');
+            if (t.isClassExpression(right)) {
+              kindByName.set(name, 'class');
+              defaultClasses.set(name, right);
+            } else if (t.isIdentifier(right)) {
+              defaultClasses.set(name, null);
+            }
           }
         } else if ((isExportsProp || isModuleExportsProp) && t.isIdentifier(left.property)) {
           styleByName.set(left.property.name, 'cjs-property');
         }
       },
     });
+    // default で公開されるクラスを記号にする（引数は constructor のもの）
+    //   例: postcss-loader 2.0.0 lib/Error.js `class SyntaxError extends Error {…}; module.exports = SyntaxError`
+    for (const [name, direct] of defaultClasses) {
+      const cls = direct ?? classNodes.get(name);
+      if (!cls || resultArray.some(f => f.name === name)) continue;
+      const ctor = cls.body.body.find((m: any) => t.isClassMethod(m) && m.kind === 'constructor');
+      kindByName.set(name, 'class');
+      resultArray.push({
+        name, isExported: true, arg: ctor ? getParams(ctor.params) : [], returnExprs: [],
+        filePath, start: cls.start, end: cls.end,
+      });
+    }
+
     resultArray.forEach((func) => {
       const ao = func.start != null ? asyncOptByStart.get(func.start) : undefined;
       func.isAsync = ao?.isAsync ?? false;
       func.optionKeys = ao?.optionKeys ?? [];
       func.exportStyle = styleByName.get(func.name) ?? 'unknown';
       func.kind = kindByName.get(func.name) ?? 'function';
+      func.defaultExportStyle = defaultNames.get(func.name);
     });
 
   } catch (error) {

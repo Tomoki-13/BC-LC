@@ -76,7 +76,7 @@ export async function runScopeCompare(maxLibs: number = Infinity): Promise<void>
       const post = await getVersionData(pair.updatedVersion);
       if (!pre || !post) { unavailable++; continue; } // 外部失敗(ref未解決/build/clone)のみ除外
       analyzable++;
-      // どちらかが空 surface = 本手法の抽出限界 → 全 mode で予測『損失なし』
+      // どちらかが空 surface = export を抽出できない → 全 mode で予測『損失なし』
       const bothExtracted = pre.surface.symbols.length > 0 && post.surface.symbols.length > 0;
       for (const mode of MODES) {
         const predictedLoss = bothExtracted && DiffSurface.diffSurface(

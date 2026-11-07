@@ -2,6 +2,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import type { ResolveMethod } from '../types/LibDiff';
+import { githubAuthEnv, githubCloneUrl } from '../utils/gitAuth';
 
 interface ResolveResult { ref: string | null; method: ResolveMethod; }
 
@@ -12,11 +13,7 @@ interface ResolveResult { ref: string | null; method: ResolveMethod; }
  */
 function ensureClone(repoUrl: string, repoDir: string, token?: string): void {
   if (fs.existsSync(path.join(repoDir, '.git'))) return;
-  const base = repoUrl.endsWith('.git') ? repoUrl.slice(0, -4) : repoUrl;
-  const url = token
-    ? base.replace('https://github.com/', `https://x-access-token:${token}@github.com/`) + '.git'
-    : base + '.git';
-  execSync(`git clone "${url}" "${repoDir}"`, { stdio: 'ignore' });
+  execSync(`git clone "${githubCloneUrl(repoUrl)}" "${repoDir}"`, { stdio: 'ignore', env: githubAuthEnv(token) });
 }
 
 /**

@@ -12,8 +12,8 @@ interface GroundTruth {
   prevVersion: string;
   updatedVersion: string;
   state: 'success' | 'failure';
-  lossByClientTest: boolean;     // 従来研究のGT: クライアントのテストが失敗したか（state==='failure'）。BC-LC の静的判定ではない
-  isBreakingByMatsuda: boolean;  // 松田研究 proposal ツールの予測値（データセット側の参考値，本手法の判定でも正解でもない）
+  lossByClientTest: boolean;     // 正解: クライアントのテストが失敗したか（state==='failure'）。BC-LC の静的判定ではない
+  isBreakingByMatsuda: boolean;  // proposal ツールの予測値（データセットにある値。判定にも正解にも使わない）
   failCount: number;      // stats.failure（何クライアントで失敗したか）
   succCount: number;      // stats.success
 }

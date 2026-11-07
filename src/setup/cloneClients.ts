@@ -5,6 +5,7 @@ import { execSync } from 'child_process';
 
 import { CLIENTS_PATH, CLIENT_REPOS_BASE, hasRepoContent, isAtCommit } from '../utils/evalShared';
 import { initRunLog, phase, progress, logEvent, runLogSummary } from '../utils/runLog';
+import { githubAuthEnv, githubCloneUrl } from '../utils/gitAuth';
 
 // clonedata/clientRepos/<lib>/<owner>/<repo> に評価で使うクライアント repo を用意する（setup 段）。
 //   R-BC setup.ts の cloneRepos を踏襲: clone → 対象コミット checkout → git clean。
@@ -31,16 +32,9 @@ interface ClientEntry { npm_pkg: string; client: string; commitId: string }
 type SyncResult = 'aligned' | 'checkedOut' | 'fetched' | 'cloned' | 'noCommit' | 'cloneFailed' | 'checkoutFailed'
   | 'wouldSync' | 'wouldClone';
 
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const FETCH_TIMEOUT_MS = 120_000;
 
-/** owner/repo の clone URL（GITHUB_TOKEN があれば認証付き） */
-function cloneUrl(nameWithOwner: string): string {
-  return GITHUB_TOKEN
-    ? `https://x-access-token:${GITHUB_TOKEN}@github.com/${nameWithOwner}.git`
-    : `https://github.com/${nameWithOwner}.git`;
-}
 
 /** エラーメッセージからトークンを伏せる */
 const redact = (e: any) => String(e?.message ?? e).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
@@ -102,7 +96,7 @@ function hasCommit(repoDir: string, commitId: string): boolean {
 /** origin から commitId だけを取り寄せる（force push で枝から外れたコミットも GitHub は SHA 指定で返すことがある） */
 function fetchCommit(repoDir: string, commitId: string): boolean {
   try {
-    execSync(`git fetch --quiet origin ${commitId}`, { stdio: 'ignore', cwd: repoDir, timeout: FETCH_TIMEOUT_MS });
+    execSync(`git fetch --quiet origin ${commitId}`, { stdio: 'ignore', cwd: repoDir, timeout: FETCH_TIMEOUT_MS, env: githubAuthEnv() });
   } catch {
     return false;
   }
@@ -148,7 +142,7 @@ function syncExisting(repoDir: string, commitId: string, dryRun: boolean): SyncR
 function cloneOne(nameWithOwner: string, commitId: string, repoDir: string, base: string): SyncResult {
   try {
     fs.mkdirSync(path.dirname(repoDir), { recursive: true });
-    execSync(`git clone ${cloneUrl(nameWithOwner)} "${repoDir}"`, { stdio: 'ignore' });
+    execSync(`git clone "${githubCloneUrl(nameWithOwner)}" "${repoDir}"`, { stdio: 'ignore', env: githubAuthEnv() });
   } catch (e) {
     // 失敗理由を記録（lib/client は progress の位置として自動で付く。URL のトークンは載せない）
     logEvent('error', `clone 失敗: ${redact(e)}`);

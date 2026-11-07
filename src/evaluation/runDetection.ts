@@ -126,7 +126,7 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
         result = { surface: null, reason: 'ref-unresolved' };
       } else {
         if (commitResolveMethod === 'git-head' || commitResolveMethod === 'commit-message') {
-          logger.warn(libName, version, 'resolve', `低信頼な手段で解決(${commitResolveMethod}) ref=${commitRef.slice(0, 12)}（要目視確認）`);
+          logger.warn(libName, version, 'resolve', `低信頼な手段で解決(${commitResolveMethod}) ref=${commitRef.slice(0, 12)}（要確認）`);
         }
         try {
           LibRepo.checkoutVersion(repoDir, commitRef);

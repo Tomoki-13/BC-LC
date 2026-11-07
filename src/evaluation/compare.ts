@@ -82,14 +82,14 @@ export function runCompare(): void {
     metrics,
   };
 
-  // 結果（混同行列・版ペアごとの判定）は results/、考察の材料（除外した版ペア・タグ別 TP/FP）は discussion/
+  // 混同行列・版ペアごとの判定は results/、除外した版ペア・タグ別 TP/FP は discussion/
   const outputDir = path.resolve(process.cwd(), LOSS_JUDGEMENT_DIR);
   const discussionDir = path.resolve(process.cwd(), LOSS_DISCUSSION_DIR);
   OutputJson.createOutputDirectory(outputDir);
   OutputJson.createOutputDirectory(discussionDir);
   fs.writeFileSync(path.join(outputDir, 'compare_summary.json'), JSON.stringify(summary, null, 2));
 
-  // 評価用 CSV（評価できたペア: test_result / 本手法の損失有無 / 原因）
+  // 評価用 CSV（評価できたペア: test_result / 判定した損失の有無 / 原因）
   const evaluationHeader = 'npm_pkg,prevVersion,updatedVersion,test_result,predicted_loss,category,loss_count,tags,causes\n';
   fs.writeFileSync(path.join(outputDir, 'evaluation.csv'), evaluationHeader + evaluatedRows.map(row =>
     [row.npm_pkg, row.prevVersion, row.updatedVersion, row.state, row.predictedLoss ? 'yes' : 'no', row.category, row.lossCount, row.tags, row.causes].map(toCsvCell).join(','),

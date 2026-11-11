@@ -26,6 +26,7 @@ function labelOf(tag: ChangeTag): string {
     case 'node-npm-requirement-raised': return 'node/npm の必要バージョン引き上げ（engines・それ未満の利用者が install/実行不可）';
     case 'published-file-missing':      return '公開物からのファイル欠落（読み込み時に Cannot find module）';
     case 'exports-restricted':          return 'package.json exports による公開範囲の縮小（サブパス・require が読めなくなる）';
+    case 'entry-default-removed':       return '入口ファイルの default の削除（require(lib)() / import x from lib が壊れる）';
     case 'dependency-changed':          return '依存の変更';
     default:                            return String(tag);
   }
@@ -55,9 +56,13 @@ function diffParams(pre: string[], post: string[]): ChangeTag | null {
   return sameSet ? 'arg-reordered' : null;
 }
 
-/** 返り値式の比較用に空白を正規化（整形だけの差を無視する） */
+/** 返り値式の比較用に空白と文字列の引用符を正規化（整形だけの差を無視する）
+ *  例: typeof x === "object" と typeof x === 'object' は同じ（is-object 1.0.1→1.0.2）。中に ' を含む "…" と ${} を含む `…` はそのまま */
 function normReturns(arr: string[] | undefined): string {
-  return (arr ?? []).join(' || ').replace(/\s+/g, ' ').trim();
+  return (arr ?? []).join(' || ')
+    .replace(/"((?:[^"'\\\n]|\\.)*)"/g, "'$1'")
+    .replace(/`((?:[^`'$\\\n]|\\.)*)`/g, "'$1'")
+    .replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -108,6 +113,7 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
   //     2a) arg-added / arg-removed / arg-reordered       引数の増減・並び替え
   //     2b) return-changed  2c) sync-to-async  2d) export-style-changed  2e) option-removed  2f) new-required
   //   package.json（symbol 非依存）: 3a) node-npm-requirement-raised   3b) module-format-changed   3c) published-file-missing
+  //                                 3d) exports-restricted   3e) entry-default-removed（入口ファイルの default）
   //   file-level（サブパス）:        4a) deep-import-broken（移動）      4b) module-removed（削除）
 
   // 1)+2) pre の全 export 名 × 全定義(ファイル)を走査
@@ -140,6 +146,10 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
         if (!relocated) continue;
         b = postSyms[0];
       }
+
+      // 署名が分からない値（kind=value）が片方にあるときは比べない
+      //   例: default が関数 → `module.exports = require('./lib/x')`（値）になると、引数 [] と比べて arg-removed に見える
+      if (a.kind === 'value' || b.kind === 'value') continue;
 
       // 2) 挙動変化を検出（arg と return は排他にしない＝取りこぼし防止）
       // 2a) arg-added / arg-removed / arg-reordered: 引数の増減・並び替え
@@ -258,6 +268,22 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
       }
       if (preEx.rootRequire && !postEx.rootRequire) out.push(exportsCandidate('(require)', 'exports の本体から require 条件を削除'));
     }
+  }
+
+  // 3e) entry-default-removed: pre の入口ファイルに default があり、post の入口ファイル（export を1件以上取れたもの）に default が無い
+  //   例: uuid 3.4.0 index.js の module.exports = uuid → 7.0.0-beta.0 src/index.js は export { default as v1 } … だけ
+  //   post の入口が ESM なら import x from 'lib' の x が undefined になる。CJS（module.exports = {…}）なら x() / new x() だけが壊れる
+  const preEntryDefault = pre.entryFile ? pre.symbols.find(s => s.filePath === pre.entryFile && s.name === 'default') : undefined;
+  const postEntrySyms = post.entryFile ? post.symbols.filter(s => s.filePath === post.entryFile) : [];
+  if (preEntryDefault && postEntrySyms.length > 0 && !postEntrySyms.some(s => s.name === 'default')) {
+    const entryEsm = post.moduleType === 'module' || postEntrySyms.some(s => s.exportStyle.startsWith('esm-'));
+    out.push({
+      libName, preVersion: pre.version, postVersion: post.version,
+      symbol: 'default', filePath: preEntryDefault.filePath,
+      tag: 'entry-default-removed', label: labelOf('entry-default-removed'), confidence: 'structural',
+      detail: `${pre.entryFile} の default（${preEntryDefault.kind}）→ ${post.entryFile} に default なし（${entryEsm ? 'ESM' : 'CJS'}）`,
+      entryEsm,
+    });
   }
 
   // 4) file-level: pre のファイルが post で消えた＝サブパス import が壊れる。1サブパス=1件（per-name の冗長を排除）

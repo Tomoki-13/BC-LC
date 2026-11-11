@@ -5,14 +5,31 @@ import ApiSurface from '../libDiff/apiSurface';
 import LibRepo from '../libDiff/libRepo';
 import type { ApiSurface as ApiSurfaceType, ApiUsage } from '../types/LibDiff';
 import type { GeneratedPattern } from '../types/patternTypes';
+import { RUN_VARIANT } from './runVariant';
 
 // eval 系スクリプトが共有する入出力パス（process.cwd() = BC-LC/src 基準）
 export const CLONE_BASE = '../../clonedata/lib_versions';
-const OUTPUT_BASE = '../../outputs/latest/BC-LC';
-export const LIBRARY_DETECT_DIR = `${OUTPUT_BASE}/library-detect`; // ライブラリ側の損失有無検出（client-detect と対）
-export const PATTERNS_DIR = `${OUTPUT_BASE}/patterns`; // 損失候補 → R-BC 形式の検出パターン（client-detect の照合入力）
-export const SURFACE_DIR = `${OUTPUT_BASE}/surface`;   // 損失判定に使った pre/post の API surface（<lib>/<prev>__<upd>.json）
-export const CLIENT_DETECT_DIR = `${OUTPUT_BASE}/client-detect`; // 一括実行時の照合結果（patterns と同居。changeversion 互換）
+// 一括実行の出力はモードごとのフォルダ（latest/BC-LC/<scope-…_detect-…>/）。同じモードの実行だけが上書きする
+//   results/    評価の値
+//   discussion/ 確認用の材料
+//   work/       途中データ（次の段の入力）
+//   changever/  changeversion（ClientFixTrace）の入力と同じ形（R-BC の method/<lib>_<verKey>/ と同じ並び）
+//   audit/      バージョン解決などの監査ログ
+export const RUN_OUTPUT_BASE = `../../outputs/latest/BC-LC/${RUN_VARIANT}`;
+const OUTPUT_BASE = RUN_OUTPUT_BASE;
+const RESULTS_DIR = `${OUTPUT_BASE}/results`;
+const DISCUSSION_DIR = `${OUTPUT_BASE}/discussion`;
+const WORK_DIR = `${OUTPUT_BASE}/work`;
+export const LIBRARY_DETECT_DIR = `${WORK_DIR}/library-detect`; // ライブラリ側の損失有無検出（client-detect と対）
+export const PATTERNS_DIR = `${WORK_DIR}/patterns`; // 損失候補 → R-BC 形式の検出パターン（client-detect の照合入力）
+export const SURFACE_DIR = `${WORK_DIR}/surface`;   // 損失判定に使った pre/post の API surface（<lib>/<upd>/{pre,post,diff}.json）
+export const LOSS_JUDGEMENT_DIR = `${RESULTS_DIR}/loss-judgement`;            // 損失判定の採点（混同行列・版ペアごとの判定）
+export const CLIENT_DETECT_DIR = `${RESULTS_DIR}/client-detection`;           // 一括実行時の照合結果（群ごとの集計・版ペアごとの detect.json）
+export const EXTRACTION_COVERAGE_DIR = `${RESULTS_DIR}/extraction-coverage`;  // .d.ts と比べた surface 抽出の網羅率
+export const LOSS_DISCUSSION_DIR = `${DISCUSSION_DIR}/loss-judgement`;        // タグ別 TP/FP・除外した版ペア
+export const CLIENT_DISCUSSION_DIR = `${DISCUSSION_DIR}/client-detection`;    // 検出の明細・クライアントごとの補足情報
+export const SCOPE_COMPARE_DIR = `${DISCUSSION_DIR}/scope-compare`;           // API の範囲ごとの損失判定の比較
+export const CHANGEVER_DIR = `${OUTPUT_BASE}/changever`;                      // changeversion の入力と同じ形
 // 単体 client-detect の出力（一括の BC-LC を上書きしない別木）。latest は毎回入れ替え・history に日時スナップショット
 export const DETECT_STANDALONE_LATEST = '../../outputs/latest/BC-LC-detect';
 export const DETECT_STANDALONE_HISTORY = '../../outputs/history/BC-LC-detect';
@@ -27,14 +44,39 @@ export function hasRepoContent(repoDir: string): boolean {
     return false;
   }
 }
+/**
+ * クローンの HEAD のコミット（.git を直接読む・git を起動しない）。読めなければ null
+ *   検出の前に「テストしたときのコミットか」を数千件まとめて確かめるため、git rev-parse を使わない
+ */
+export function readHeadCommit(repoDir: string): string | null {
+  try {
+    const gitDir = path.join(repoDir, '.git');
+    const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf-8').trim();
+    if (!head.startsWith('ref: ')) return head; // detached（setup が commitId に checkout した状態）
+    const ref = head.slice('ref: '.length);
+    const loose = path.join(gitDir, ref);
+    if (fs.existsSync(loose)) return fs.readFileSync(loose, 'utf-8').trim();
+    const packed = fs.readFileSync(path.join(gitDir, 'packed-refs'), 'utf-8');
+    const line = packed.split('\n').find(l => l.endsWith(` ${ref}`));
+    return line ? line.split(' ')[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** クローンの HEAD がテストしたときのコミット（commitId）か */
+export function isAtCommit(repoDir: string, commitId: string): boolean {
+  const head = readHeadCommit(repoDir);
+  return !!head && !!commitId && head.toLowerCase().startsWith(commitId.toLowerCase());
+}
 export const ALLDATASET_CLIENTS_BASE = '../../clonedata/alldataset_clients'; // R-BC のクライアント実体（<lib>/<ver>/<state>/<owner>/<repo>）
 export const TEST_RESULT_PATH = '../../datasets/test_result.json'; // 採点の GT（L 版 × S repo → 合否）。検出入力には使わない
 export const CLIENTS_PATH = '../../datasets/client_detect_clients.json'; // 検出入力: 依存メンバーシップ（state なし・事前用意＝make prepare-clients）
 export const PATTERNS_PATH = `${PATTERNS_DIR}/patterns.json`;
-export const EVAL_DIR = `${OUTPUT_BASE}/eval`;           // 採点結果（混同行列・指標）
-export const ANALYSIS_DIR = `${OUTPUT_BASE}/analysis`;   // 特徴量精査ツール（tool名ごと）
+export const GROUND_TRUTH_DIR = `${WORK_DIR}/ground-truth`; // 正解ラベル（版ペアごとのテスト結果）
+export const ANALYSIS_DIR = `${DISCUSSION_DIR}/analysis`;   // 特徴量精査ツール（tool名ごと）
 export const AUDIT_DIR = `${OUTPUT_BASE}/audit`;         // 実行監査ログ
-export const GROUND_TRUTH_PATH = `${EVAL_DIR}/ground_truth.json`;
+export const GROUND_TRUTH_PATH = `${GROUND_TRUTH_DIR}/ground_truth.json`;
 export const RECORDS_PATH = `${LIBRARY_DETECT_DIR}/records.json`; // runDetection の出力＝採点/分析の共通入力
 
 // 一時的なサンプル調査の出力（本線 BC-LC と分離。latest 更新＋history にアーカイブ）
@@ -47,7 +89,7 @@ export interface GroundTruthPair {
   prevVersion: string;
   updatedVersion: string;
   state: 'success' | 'failure';
-  lossByClientTest: boolean;   // 従来研究のGT: クライアントのテストが失敗したか（state==='failure'）。BC-LC の静的判定 bcLoss とは別物
+  lossByClientTest: boolean;   // 正解: クライアントのテストが失敗したか（state==='failure'）。BC-LC の静的判定 bcLoss とは別物
 }
 
 /** 検出した損失候補1件（diffSurface の1タグ。採点は tag/detail/confidence のみ参照） */
@@ -74,7 +116,7 @@ export type ExcludeReason = 'no-repo-url' | 'clone-failed' | 'ref-unresolved' | 
 /**
  * 解析可否の3分類（混同行列でどう扱うかを決める唯一の基準。compare/scope はこれだけ見る）
  *   analyzed      両版とも export を抽出でき pre/post を diff できた → 通常評価（TP/FP/FN/TN）
- *   method-limit  コードは取れたが export が0件(empty) → 予測『損失なし』で FN/TN に計上（本手法の抽出限界）
+ *   method-limit  コードは取れたが export が0件(empty) → 予測『損失なし』で FN/TN に計上（export を抽出できない）
  *   external      リポジトリ/版が取れず解析を試みられない → 母数から除外
  */
 export type Analyzability = 'analyzed' | 'method-limit' | 'external';
@@ -103,7 +145,7 @@ export interface DetectionRecord extends GroundTruthPair {
   status: 'evaluated' | 'excluded';
   reason: string;
   analyzability: Analyzability;
-  bcLoss: BcLoss;             // 本研究の損失有無を一目で示す。'loss'=損失候補あり / 'no-loss'=評価済みで候補なし / 'unevaluated'=評価不能(excluded)
+  bcLoss: BcLoss;             // 損失の判定。'loss'=損失候補あり / 'no-loss'=評価済みで候補なし / 'unevaluated'=評価不能(excluded)
   candidates: LossCandidate[];
   depChanges?: DepChange[];   // pre→post の依存 range 変化（signal・採点/FN判定には使わない）
 }
@@ -177,7 +219,7 @@ export const toCsvCell = (value: unknown): string => {
 export function loadGroundTruth(): GroundTruthPair[] {
   const gtPath = path.resolve(process.cwd(), GROUND_TRUTH_PATH);
   if (!fs.existsSync(gtPath)) {
-    console.error(`[Error] ${gtPath} が無い（先に eval/groundTruth.ts）`);
+    console.error(`[Error] ${gtPath} が無い（先に evaluation/groundTruth.ts）`);
     process.exit(1);
   }
   return JSON.parse(fs.readFileSync(gtPath, 'utf-8')) as GroundTruthPair[];

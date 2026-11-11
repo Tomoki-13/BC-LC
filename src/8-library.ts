@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './utils/loadEnv';
 import fs from 'fs';
 import path from 'path';
 
@@ -11,8 +11,8 @@ import { generatePatterns } from './patternGen/generatePatterns';
 import { runClientDetect } from './clientDetect/runClientDetect';
 import { initRunLog, phase, progress, logEvent } from './utils/runLog';
 
-// targets（version ペア）を入力に pattern 生成を回して目視できるようにする実行スクリプト
-//   入力: TARGETS（既定 ../../datasets/targets.json。研究の全記録ペアは targets.all.json）/ clonedata/lib_versions/<lib>（既存クローンを使う）
+// targets（version ペア）を入力に pattern 生成を回して確認できるようにする実行スクリプト
+//   入力: TARGETS（既定 ../../datasets/targets.json。全記録ペアは targets.all.json）/ clonedata/lib_versions/<lib>（既存クローンを使う）
 //   出力: メインパイプライン(outputs/latest/BC-LC)と同形式（library-detect/records.json ＋ patterns/patterns.json ＋ summary.json）を RUN_LABEL 名の下に
 //   実行: cd src && npx tsx 8-library.ts          （既定 8lib → BC-LC-8lib）
 //         cd src && TARGETS=../../datasets/targets.all.json RUN_LABEL=BC-LC-all npx tsx 8-library.ts

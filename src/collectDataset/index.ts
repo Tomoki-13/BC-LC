@@ -17,7 +17,7 @@
 // 必要な環境変数: GITHUB_TOKEN（code search / contents API / clone 用）
 // ==========================================
 
-import dotenv from 'dotenv';
+import '../utils/loadEnv';
 import fs from 'fs';
 import path from 'path';
 
@@ -35,11 +35,6 @@ import { cloneLibVersions } from './lib/cloneLibVersions';
 import { cloneClient } from './lib/cloneClients';
 import { getToken } from './github/githubClient';
 
-// .env を複数候補から読み込む（実行 cwd=BC-LC/src を基準に BC-LC ルート / メタルート）
-// shell で export 済みの値が最優先（dotenv は既存の env を上書きしない）
-for (const envPath of ['.env', '../.env', '../../.env']) {
-  dotenv.config({ path: path.resolve(process.cwd(), envPath) });
-}
 
 // ==========================================
 // 設定（引数が無ければこの既定値を使用）

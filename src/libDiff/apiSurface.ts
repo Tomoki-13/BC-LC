@@ -76,7 +76,7 @@ async function listSourceFiles(treeDir: string): Promise<string[]> {
 async function extractExports(filePath: string, treeDir: string): Promise<ApiSymbol[]> {
   const rel = path.relative(treeDir, filePath);
   const funcs = await getFunction(filePath, 0); // mode 0 = export 関数のみ + async/optionKeys/exportStyle/kind
-  const symbols: ApiSymbol[] = funcs.map(f => ({
+  const toSymbol = (f: typeof funcs[number]): ApiSymbol => ({
     name: f.name,
     kind: (f.kind ?? 'function') as SymbolKind,
     exportStyle: (f.exportStyle ?? 'unknown') as ExportStyle,
@@ -86,7 +86,24 @@ async function extractExports(filePath: string, treeDir: string): Promise<ApiSym
     accessPath: f.propertyPath,  // プロパティ公開（例 uuid.v4）。直接 export は undefined
     optionKeys: f.optionKeys ?? [],
     filePath: rel,
-  } as ApiSymbol));
+  } as ApiSymbol);
+
+  // default で公開される関数・クラスは、クライアントからは名前が見えないので 'default' の記号にする（元の名前は localName）
+  //   同じファイルに複数あるとき（分岐ごとの module.exports = …）は後ろのもの（start が最大）を default にする
+  //   名前でも公開されている（module.exports = v4; module.exports.v4 = v4）ときは、名前の記号を残して default を別に足す
+  const defaultFn = funcs
+    .filter(f => f.defaultExportStyle !== undefined)
+    .reduce<typeof funcs[number] | undefined>((last, f) => (!last || (f.start ?? 0) >= (last.start ?? 0) ? f : last), undefined);
+  const alsoNamed = defaultFn !== undefined && defaultFn.exportStyle !== defaultFn.defaultExportStyle;
+  const symbols: ApiSymbol[] = funcs.map(f => (f === defaultFn && !alsoNamed
+    ? { ...toSymbol(f), name: 'default', localName: f.name !== 'default' ? f.name : undefined }
+    : toSymbol(f)));
+  if (defaultFn && alsoNamed) {
+    symbols.push({
+      ...toSymbol(defaultFn), name: 'default', localName: defaultFn.name, accessPath: undefined,
+      exportStyle: defaultFn.defaultExportStyle as ExportStyle,
+    });
+  }
 
   // 非関数 export 名を補完（getFunction が拾わなかった名前のみ value として追加）
   const known = new Set(symbols.map(s => s.name));
@@ -102,22 +119,87 @@ async function extractExports(filePath: string, treeDir: string): Promise<ApiSym
       isAsync: false,
       optionKeys: [],
       filePath: rel,
+      ...(e.from ? { reexport: e.from } : {}),
     } as ApiSymbol);
   }
   return symbols;
 }
 
+const RESOLVE_EXT = ['', '.js', '.ts', '.mjs', '.cjs', '.jsx', '.tsx', '/index.js', '/index.ts'];
+
+/** 相対指定子を、そのまま → 拡張子補完 → /index の順に surface のファイルへ解決する。無ければ undefined */
+function resolveRelativeFile(fromFile: string, spec: string, files: Set<string>): string | undefined {
+  const base = path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), spec)).replace(/\/$/, '');
+  return RESOLVE_EXT.map(e => base + e).find(c => files.has(c));
+}
+
+/**
+ * 相対パスの読み込みをそのまま公開している値に、読み込み先の関数・クラスの署名を写す
+ *   例: uuid 3.4.0 index.js の uuid.v1 = require('./v1') → v1.js の default 関数 v1(options, buf, offset)
+ *       lie 2.9.1 lib/index.js の module.exports = require('./promise') → lib/promise.js の default 関数 Promise(resolver)
+ *   読み込み先も値の再公開なら 5 段までたどる。名前・公開形・ファイルは公開した側のまま
+ */
+function resolveReexports(symbols: ApiSymbol[]): void {
+  const files = new Set(symbols.map(s => s.filePath));
+  const byFile = new Map<string, ApiSymbol[]>();
+  for (const s of symbols) {
+    const arr = byFile.get(s.filePath);
+    if (arr) arr.push(s); else byFile.set(s.filePath, [s]);
+  }
+  const definitionOf = (sym: ApiSymbol, depth: number): ApiSymbol | undefined => {
+    if (!sym.reexport || depth > 5) return undefined;
+    const target = resolveRelativeFile(sym.filePath, sym.reexport.spec, files);
+    if (!target) return undefined;
+    const found = byFile.get(target)?.find(s => s.name === sym.reexport!.imported);
+    if (!found) return undefined;
+    return found.kind === 'value' ? definitionOf(found, depth + 1) : found;
+  };
+  for (const s of symbols) {
+    if (s.kind !== 'value' || !s.reexport) continue;
+    const def = definitionOf(s, 0);
+    if (!def) continue;
+    Object.assign(s, {
+      kind: def.kind, params: def.params, returnExprs: def.returnExprs, isAsync: def.isAsync, optionKeys: def.optionKeys,
+      resolvedFrom: `${def.filePath}#${def.name}`,
+    });
+  }
+}
+
+/**
+ * require('lib') で読まれる入口ファイルを surface のファイルから決める
+ *   package.json の main / module を解決し、ビルド成果物（dist/ 等・surface の対象外）なら慣例の置き場（index / src/index / lib/index / <name>）を順に探す
+ */
+function findEntryFile(treeDir: string, files: Set<string>): string | undefined {
+  const specs: string[] = [];
+  let name: string | undefined;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(treeDir, 'package.json'), 'utf-8'));
+    for (const f of [pkg.main, pkg.module, pkg['jsnext:main']]) if (typeof f === 'string' && f.length > 0) specs.push(f);
+    if (typeof pkg.name === 'string') name = pkg.name.replace(/^@[^/]+\//, '');
+  } catch { /* package.json が読めなければ慣例の置き場だけで探す */ }
+  specs.push('index', 'src/index', 'lib/index');
+  if (name) specs.push(name, `src/${name}`, `lib/${name}`);
+  for (const spec of specs) {
+    const found = resolveRelativeFile('package.json', `./${spec.replace(/^\.\//, '')}`, files);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 /** 指定ツリー（=1バージョン）の export API surface を構築 */
 async function buildApiSurface(treeDir: string, version: string, tag: string): Promise<ApiSurface> {
   const symbols: ApiSymbol[] = [];
-  for (const f of await listSourceFiles(treeDir)) {
+  const sourceFiles = await listSourceFiles(treeDir);
+  for (const f of sourceFiles) {
     symbols.push(...await extractExports(f, treeDir));
   }
+  resolveReexports(symbols);
   return {
     version, tag, scope: 'export', symbols,
     engines: readEngines(treeDir), moduleType: readModuleType(treeDir),
     dtsValidation: validateAgainstDts(treeDir, symbols),
     publishedMissing: findPublishedMissing(treeDir), packageExports: readPackageExports(treeDir),
+    entryFile: findEntryFile(treeDir, new Set(sourceFiles.map(f => path.relative(treeDir, f)))),
   };
 }
 

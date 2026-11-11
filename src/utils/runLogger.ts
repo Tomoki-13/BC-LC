@@ -3,7 +3,7 @@ import path from 'path';
 import type { ResolveMethod } from '../types/LibDiff';
 import { logEvent } from './runLog';
 
-// tag/package-json は高信頼、git-head/commit-message は要目視確認
+// tag/package-json は高信頼、git-head/commit-message は要確認
 const RELIABLE: ResolveMethod[] = ['tag', 'package-json'];
 
 interface ResolutionRec { lib: string; version: string; method: ResolveMethod; ref: string; }

@@ -15,6 +15,7 @@ export type SymbolKind = 'function' | 'class' | 'value' | 'getter' | 'unknown';
 /** 外部 API として観測した 1 シンボル */
 export interface ApiSymbol {
   name: string;            // export 名（default は 'default'）
+  localName?: string;      // default で公開される関数・クラスのソース上の名前（例 accepts の Accepts）。無名なら undefined
   kind: SymbolKind;
   exportStyle: ExportStyle;
   params?: string[];       // function / class constructor の引数名（arity・名称比較用 / 型は含めない）
@@ -23,6 +24,8 @@ export interface ApiSymbol {
   accessPath?: string;     // プロパティ経由の公開パス（例 "uuid.v4"）。直接 export は undefined
   optionKeys?: string[];   // 関数が消費する options オブジェクトのキー（分割代入 or opts.key 読み取り）
   filePath: string;        // repo 相対パス
+  reexport?: { spec: string; imported: string }; // 相対パスの読み込みをそのまま公開する値（例 uuid.v1 = require('./v1') → { spec: './v1', imported: 'default' }）
+  resolvedFrom?: string;   // reexport をたどって署名を写した定義元（例 'v1.js#default'）
 }
 
 /**
@@ -50,6 +53,7 @@ export interface ApiSurface {
   dtsValidation?: DtsValidation;             // .d.ts との突き合わせ（抽出の妥当性検証）
   publishedMissing?: PublishedMissing[];     // 公開物に入らないのに main から読み込まれるファイル（package.json に files 指定が無ければ undefined）
   packageExports?: PackageExports;           // package.json exports（指定が無ければ undefined）
+  entryFile?: string;                        // require('lib') で読まれる入口ファイル（surface のファイルから決められなければ undefined）
 }
 
 /** package.json exports の要約（どのサブパスを外部に公開し、本体を require で読めるか） */
@@ -90,6 +94,7 @@ export type ChangeTag =
   | 'node-npm-requirement-raised' // engines 引き上げ（それ未満の利用者が install/実行不可）
   | 'published-file-missing' // 公開物（package.json files）から main が読むファイルが欠落＝読み込み時に Cannot find module
   | 'exports-restricted'     // package.json exports の新設・縮小で、公開されなくなったサブパス／本体の require が読めなくなる
+  | 'entry-default-removed'  // 入口ファイルの default が無くなる（require('lib')() / import x from 'lib' が壊れる）
   // --- 予約（今後利用する可能性があり型として記録するのみ。現状 diffSurface は emit せず、分類にも結果ラベルにも使わない）---
   | 'option-added'           // options キーの追加＝加算的・非破壊。旧クライアントは影響を受けない
   | 'arg-added'              // 追加引数が必須か任意か surface（引数名のみ）では判別できず、必須のときだけ破壊なので構造的に断定できない
@@ -105,7 +110,7 @@ export const LOSS_TAGS: ReadonlySet<ChangeTag> = new Set<ChangeTag>([
   'function-removed', 'export-removed', 'module-removed', 'deep-import-broken',
   'arg-reordered', 'arg-removed', 'sync-to-async', 'new-required', 'module-format-changed',
   'option-removed', 'export-style-changed', 'return-changed', 'node-npm-requirement-raised',
-  'published-file-missing', 'exports-restricted',
+  'published-file-missing', 'exports-restricted', 'entry-default-removed',
 ]);
 
 /** 静的検出の確信度 */
@@ -140,6 +145,7 @@ export interface LossCandidate {
   detail?: string;         // 補足（before/after の要約など）
   goneDir?: string;        // deep-import-broken / module-removed で、消えたファイルのディレクトリごと post に無いときの公開サブパス（例 'util'）
   exportsAllowed?: string[]; // exports-restricted（exports 新設）のとき post で公開されるサブパス（これ以外の deep import が壊れる）
+  entryEsm?: boolean;      // entry-default-removed のとき post の入口が ESM（import x from 'lib' の x が undefined になる）
 }
 
 /** 機能2 の出力: 損失をパターン化したもの（P1 形式 + 変更種別タグ） */

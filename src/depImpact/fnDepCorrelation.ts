@@ -41,7 +41,7 @@ function runFnDepCorrelation(): void {
   const fn = perCategory.find(r => r.category === 'FN')!;
   const tn = perCategory.find(r => r.category === 'TN')!;
 
-  // FN ペアで実際に major-bump した依存を列挙（目視・原因あたり付け用）
+  // FN ペアで実際に major-bump した依存を列挙（確認用）
   const fnMajorBumps = evaluated
     .filter(r => categoryOf(r) === 'FN' && hasMajorBump(r))
     .map(r => ({

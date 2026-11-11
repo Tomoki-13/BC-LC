@@ -32,6 +32,7 @@ export interface ExtendedFunctionMetaInfo extends FunctionMetaInfo {
   optionKeys?: string[];               // 消費する options オブジェクトのキー（分割代入 / opts.key 読み取り）
   exportStyle?: ExportStyleTag;        // export の束縛形態（cjs/esm・named/default/property）
   kind?: SymbolKindTag;                // シンボル種別（class 検出）
+  defaultExportStyle?: ExportStyleTag; // モジュール本体（module.exports = X / export default X）として公開されるときの形。exportStyle が cjs-property でも付きうる
 }
 
 export interface ModuleExportProperty {

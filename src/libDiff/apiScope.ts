@@ -50,6 +50,7 @@ function filterSurface(surface: ApiSurface, mode: ScopeMode, usage: ApiUsage): A
   if (mode === 0) return surface;
   const keep = (s: ApiSymbol): boolean =>
     usage.named.has(s.name)
+    || (s.localName !== undefined && usage.named.has(s.localName))
     || (usage.defaultUsed && (s.name === 'default' || s.exportStyle === 'esm-default' || s.exportStyle === 'cjs-module-default'))
     || [...usage.deepPaths].some(dp => matchesDeepPath(s.filePath, dp));
   return { ...surface, symbols: surface.symbols.filter(keep) };

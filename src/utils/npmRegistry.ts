@@ -58,8 +58,8 @@ export async function fetchVersionMeta(libraryName: string, version: string): Pr
  * target（更新後）に対する「一つ前」を決定
  * - 「一つ前」= target より厳密に小さい公開版のうち最大
  * - 既定では target がプレリリースでない限り候補からプレリリースを除外
- * - knownPrev を渡すと自動算出せずそれを prev に採用する（研究用途）。
- *   本研究のデータセットは prev がプレリリースの遷移（例 uuid 8.0.0-beta.0 → 8.0.0）を
+ * - knownPrev を渡すと自動算出せずそれを prev に採用する。
+ *   このデータセットは prev がプレリリースの遷移（例 uuid 8.0.0-beta.0 → 8.0.0）を
  *   含み、自動算出では安定版 target からプレリリース prev を除外して取り違えるため、
  *   記録済みの prev をそのまま入力する。
  */

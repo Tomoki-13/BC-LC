@@ -54,6 +54,8 @@ export interface ApiSurface {
   publishedMissing?: PublishedMissing[];     // 公開物に入らないのに main から読み込まれるファイル（package.json に files 指定が無ければ undefined）
   packageExports?: PackageExports;           // package.json exports（指定が無ければ undefined）
   entryFile?: string;                        // require('lib') で読まれる入口ファイル（surface のファイルから決められなければ undefined）
+  unpublishedFiles?: string[];                // 記号のあるファイルのうち npm で配られないもの（package.json が読めなければ undefined）
+  importsByFile?: Record<string, Record<string, string>>; // 記号のあるファイルの読み込み（ローカル名 → 指定子）。返り値の比較で、内部の名前の付け替えと読み込むパッケージの変化を見分ける
 }
 
 /** package.json exports の要約（どのサブパスを外部に公開し、本体を require で読めるか） */

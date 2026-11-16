@@ -27,7 +27,7 @@ export function parseScope(value: string | undefined): ApiScopeName {
  *   2 config : ＋設定ファイル（CI 設定・engines・.nvmrc から推定した Node のバージョンが、引き上げられた下限を下回る）
  *   3 pkg    : ＋package.json の依存に直接書いてある（コードで読み込んでいないクライアント）
  *   4 all    : ＋ロックファイルに載っている・registry で依存の依存（2段まで）に届く
- * 依存の経路は粒度 3・4 のときだけたどる（1・2 では読まない・npm registry にも接続しない）。結果は clients_detail.csv の library_link に残す
+ * 依存の経路は粒度 3・4 のときだけたどる（1・2 では読まない・npm registry にも接続しない）。結果は detected_clients/detail_clients.csv の library_link に残す
  */
 export type DetectLevel = 1 | 2 | 3 | 4;
 export const DEFAULT_DETECT_LEVEL: DetectLevel = 2;

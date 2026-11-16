@@ -44,8 +44,8 @@ export function usageCallPatterns(input: ConverterInput): GeneratedPattern[] {
   const out: GeneratedPattern[] = [];
 
   if (isDefault) {
+    // import * as x は TypeScript（esModuleInterop なし）では require と同じになり、x() は module.exports を呼ぶ
     for (const binding of objectBindings(meta.libName)) {
-      if (binding.form === 'esm-namespace') continue;
       out.push({ ...meta, importForm: binding.form, calls: [binding.call, directCall()] });
       out.push({ ...meta, importForm: `${binding.form}#new`, calls: [binding.call, newCall()] });
     }

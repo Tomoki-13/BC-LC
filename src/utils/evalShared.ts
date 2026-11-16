@@ -10,26 +10,28 @@ import { RUN_VARIANT } from './runVariant';
 // eval 系スクリプトが共有する入出力パス（process.cwd() = BC-LC/src 基準）
 export const CLONE_BASE = '../../clonedata/lib_versions';
 // 一括実行の出力はモードごとのフォルダ（latest/BC-LC/<scope-…_detect-…>/）。同じモードの実行だけが上書きする
-//   results/    評価の値
-//   discussion/ 確認用の材料
-//   work/       途中データ（次の段の入力）
-//   changever/  changeversion（ClientFixTrace）の入力と同じ形（R-BC の method/<lib>_<verKey>/ と同じ並び）
-//   audit/      バージョン解決などの監査ログ
+//   結果は「何の結果か」ごとのフォルダに分け、各フォルダの一番大事な数値は key_results.<json|csv> に置く（1フォルダに1つ）
+//   breakdown_*＝内訳（タグ別・ライブラリ別・群別）／detail_*＝1行1件の明細。構成と列は docs/mechanics/output-reference.md
 export const RUN_OUTPUT_BASE = `../../outputs/latest/BC-LC/${RUN_VARIANT}`;
 const OUTPUT_BASE = RUN_OUTPUT_BASE;
-const RESULTS_DIR = `${OUTPUT_BASE}/results`;
-const DISCUSSION_DIR = `${OUTPUT_BASE}/discussion`;
-const WORK_DIR = `${OUTPUT_BASE}/work`;
-export const LIBRARY_DETECT_DIR = `${WORK_DIR}/library-detect`; // ライブラリ側の損失有無検出（client-detect と対）
-export const PATTERNS_DIR = `${WORK_DIR}/patterns`; // 損失候補 → R-BC 形式の検出パターン（client-detect の照合入力）
-export const SURFACE_DIR = `${WORK_DIR}/surface`;   // 損失判定に使った pre/post の API surface（<lib>/<upd>/{pre,post,diff}.json）
-export const LOSS_JUDGEMENT_DIR = `${RESULTS_DIR}/loss-judgement`;            // 損失判定の採点（混同行列・版ペアごとの判定）
-export const CLIENT_DETECT_DIR = `${RESULTS_DIR}/client-detection`;           // 一括実行時の照合結果（群ごとの集計・版ペアごとの detect.json）
-export const EXTRACTION_COVERAGE_DIR = `${RESULTS_DIR}/extraction-coverage`;  // .d.ts と比べた surface 抽出の網羅率
-export const LOSS_DISCUSSION_DIR = `${DISCUSSION_DIR}/loss-judgement`;        // タグ別 TP/FP・除外した版ペア
-export const CLIENT_DISCUSSION_DIR = `${DISCUSSION_DIR}/client-detection`;    // 検出の明細・クライアントごとの補足情報
-export const SCOPE_COMPARE_DIR = `${DISCUSSION_DIR}/scope-compare`;           // API の範囲ごとの損失判定の比較
-export const CHANGEVER_DIR = `${OUTPUT_BASE}/changever`;                      // changeversion の入力と同じ形
+export const KEY_RESULTS_JSON = 'key_results.json';
+export const KEY_RESULTS_CSV = 'key_results.csv';
+export const RUN_SUMMARY_DIR = `${OUTPUT_BASE}/run_summary`;                               // 実行全体の一番大事な数値・バージョンペアごとのまとめ
+export const LOSS_JUDGEMENT_DIR = `${OUTPUT_BASE}/loss_judgement_accuracy`;                // 損失判定の精度（混同行列・バージョンペアごとの判定・除外）
+export const LOSS_BY_TAG_DIR = `${OUTPUT_BASE}/loss_judgement_by_tag`;                     // 損失判定のタグごとの TP/FP
+export const SCOPE_COMPARE_DIR = `${OUTPUT_BASE}/loss_judgement_by_api_scope`;             // API の範囲ごとの損失判定の比較
+export const RETURN_ANALYSIS_DIR = `${OUTPUT_BASE}/return_changed_analysis`;               // return-changed の候補の分析
+export const EXTRACTION_COVERAGE_DIR = `${OUTPUT_BASE}/extracted_functions_vs_dts`;        // .d.ts と比べた surface 抽出の網羅率
+export const LOSS_FUNCTIONS_DIR = `${OUTPUT_BASE}/loss_functions_list`;                    // 損失と判定した関数（＝パターン化した関数）の一覧
+export const PUBLIC_API_INVENTORY_DIR = `${OUTPUT_BASE}/public_api_inventory`;             // 公開 API の一覧と .d.ts・DIAGNOSE の突き合わせ（make api-inventory）
+export const PATTERNS_DIR = `${OUTPUT_BASE}/generated_patterns`;                           // 損失候補 → R-BC 形式の検出パターン（client-detect の照合入力）
+export const CLIENT_DETECT_DIR = `${OUTPUT_BASE}/detected_clients`;                        // 検出したクライアント（群ごとの集計・明細・照合の詳細）
+export const INTERMEDIATE_DIR = `${OUTPUT_BASE}/intermediate_data`;                        // 次の段の入力になる途中データ
+export const LIBRARY_DETECT_DIR = `${INTERMEDIATE_DIR}/loss_candidates`;                   // バージョンペアごとの損失候補（runDetection の出力）
+export const SURFACE_DIR = `${INTERMEDIATE_DIR}/api_surface`;                              // 損失判定に使った pre/post の API surface（<lib>/<upd>/{pre,post,diff}.json）
+export const CHANGEVER_DIR = `${OUTPUT_BASE}/changeversion_input`;                         // changeversion（ClientFixTrace）の入力と同じ形（R-BC の method/<lib>_<verKey>/ と同じ並び）
+/** detected_clients/ の中の群ごとのフォルダ（<群>/ にバージョンペアごとの照合の詳細と群の内訳） */
+export const groupDirOf = (clientDetectBase: string, group: string) => `${clientDetectBase}/per_group/${group}`;
 // 単体 client-detect の出力（一括の BC-LC を上書きしない別木）。latest は毎回入れ替え・history に日時スナップショット
 export const DETECT_STANDALONE_LATEST = '../../outputs/latest/BC-LC-detect';
 export const DETECT_STANDALONE_HISTORY = '../../outputs/history/BC-LC-detect';
@@ -72,12 +74,12 @@ export function isAtCommit(repoDir: string, commitId: string): boolean {
 export const ALLDATASET_CLIENTS_BASE = '../../clonedata/alldataset_clients'; // R-BC のクライアント実体（<lib>/<ver>/<state>/<owner>/<repo>）
 export const TEST_RESULT_PATH = '../../datasets/test_result.json'; // 採点の GT（L 版 × S repo → 合否）。検出入力には使わない
 export const CLIENTS_PATH = '../../datasets/client_detect_clients.json'; // 検出入力: 依存メンバーシップ（state なし・事前用意＝make prepare-clients）
-export const PATTERNS_PATH = `${PATTERNS_DIR}/patterns.json`;
-export const GROUND_TRUTH_DIR = `${WORK_DIR}/ground-truth`; // 正解ラベル（版ペアごとのテスト結果）
-export const ANALYSIS_DIR = `${DISCUSSION_DIR}/analysis`;   // 特徴量精査ツール（tool名ごと）
+export const PATTERNS_PATH = `${PATTERNS_DIR}/all_patterns.json`;
+export const GROUND_TRUTH_DIR = `${INTERMEDIATE_DIR}/ground_truth`; // 正解ラベル（版ペアごとのテスト結果）
+export const ANALYSIS_DIR = `${OUTPUT_BASE}/other_analysis`;   // make run に含まれない分析ツール（ツール名ごと）
 export const AUDIT_DIR = `${OUTPUT_BASE}/audit`;         // 実行監査ログ
 export const GROUND_TRUTH_PATH = `${GROUND_TRUTH_DIR}/ground_truth.json`;
-export const RECORDS_PATH = `${LIBRARY_DETECT_DIR}/records.json`; // runDetection の出力＝採点/分析の共通入力
+export const RECORDS_PATH = `${LIBRARY_DETECT_DIR}/loss_candidates_per_version_pair.json`; // runDetection の出力＝採点/分析の共通入力
 
 // 一時的なサンプル調査の出力（本線 BC-LC と分離。latest 更新＋history にアーカイブ）
 const SAMPLE_LATEST = '../../outputs/latest/BC-sample';
@@ -136,7 +138,7 @@ export function classifyAnalyzability(reasons: ExcludeReason[]): Analyzability {
 }
 
 /**
- * 1ペアの検出事実（runDetection が全ペア分を records.json に書き、compare/analysis が読む）
+ * 1ペアの検出事実（runDetection が全ペア分を loss_candidates_per_version_pair.json に書き、compare/analysis が読む）
  *   status='evaluated': 両バージョンの surface 抽出成功 → candidates が検出結果
  *   status='excluded' : どちらか評価不能（reason に理由）→ candidates は空
  *   analyzability      : 混同行列での扱いを決める型付きタグ（reason の文字列解釈に依存しないため）
@@ -154,7 +156,7 @@ export interface DetectionRecord extends GroundTruthPair {
 export type BcLoss = 'loss' | 'no-loss' | 'unevaluated';
 
 /**
- * 1ペアの生成パターン（runDetection が全ペア分を patterns.json に書く。client-detect の照合入力）
+ * 1ペアの生成パターン（runDetection が全ペア分を all_patterns.json に書く。client-detect の照合入力）
  *   patterns    : LOSS_TAGS の候補を R-BC 形式に変換したもの（0件＝損失候補なし or 全て skip）
  *   skippedTags : パターン化しなかった候補のタグ（converter が空を返した＝node-npm 等）
  */
@@ -166,7 +168,7 @@ export interface PatternRecord {
   skippedTags: string[];
 }
 
-/** records.json を読み込む。入力: なし / 出力: 検出事実の配列（無ければエラー終了） */
+/** loss_candidates_per_version_pair.json を読み込む。入力: なし / 出力: 検出事実の配列（無ければエラー終了） */
 export function loadRecords(): DetectionRecord[] {
   const recordsPath = path.resolve(process.cwd(), RECORDS_PATH);
   if (!fs.existsSync(recordsPath)) {

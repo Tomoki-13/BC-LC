@@ -17,13 +17,13 @@ export const createAstFromFile = (filePath: string, fileContent: string): File |
       || (!isTypeScript && /<[A-Za-z]/.test(fileContent));
     if (wantsJsx) plugins.push('jsx');
 
-    const ast = parser.parse(fileContent, {
-      sourceType: 'unambiguous',
-      plugins,
-      errorRecovery: true,
-    });
-
-    return ast;
+    try {
+      return parser.parse(fileContent, { sourceType: 'unambiguous', plugins, errorRecovery: true });
+    } catch (error) {
+      // 失敗したときだけ Flow の型注釈と関数バインド（::f）を読めるようにしてやり直す。flow は typescript と併用できない
+      if (isTypeScript) throw error;
+      return parser.parse(fileContent, { sourceType: 'unambiguous', plugins: [...plugins, 'flow', 'functionBind'], errorRecovery: true });
+    }
   } catch (error) {
     // console.error(`AST creation not possible: ${filePath}`);
     // console.error(error);

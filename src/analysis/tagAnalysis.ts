@@ -18,7 +18,7 @@ const formatTally = (tally: Tally) => Object.entries(tally)
   .map(([key, v]) => ({ key, fail: v.fail, succ: v.succ, total: v.fail + v.succ, failRate: +(v.fail / (v.fail + v.succ)).toFixed(3) }))
   .sort((a, b) => b.succ - a.succ);
 
-/** 検出タグ別に fail/succ を集計し、FP のノイズ源を特定する（records.json 由来 → tag_analysis.json） */
+/** 検出タグ別に fail/succ を集計し、FP のノイズ源を特定する（loss_candidates_per_version_pair.json 由来 → tag_analysis.json） */
 function runTagAnalysis(): void {
   const records = loadRecords().filter(r => r.status === 'evaluated');
 
@@ -46,7 +46,7 @@ function runTagAnalysis(): void {
     soleReasonTag: formatTally(soleTag),
   };
 
-  const outputDir = path.resolve(process.cwd(), ANALYSIS_DIR, 'tagAnalysis');
+  const outputDir = path.resolve(process.cwd(), ANALYSIS_DIR, 'tag_analysis');
   fs.mkdirSync(outputDir, { recursive: true });
   fs.writeFileSync(path.join(outputDir, 'tag_analysis.json'), JSON.stringify(summary, null, 2));
   console.log(JSON.stringify(summary, null, 2));

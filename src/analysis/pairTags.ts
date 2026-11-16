@@ -3,7 +3,7 @@ import path from 'path';
 
 import { ANALYSIS_DIR, DetectionRecord, loadRecords } from '../utils/evalShared';
 
-const PAIRTAGS_DIR = path.resolve(process.cwd(), ANALYSIS_DIR, 'pairTags');
+const PAIRTAGS_DIR = path.resolve(process.cwd(), ANALYSIS_DIR, 'pair_tags');
 
 // 1ペアの検出結果（tags=重複排除タグ / confidences=confidence集合 / loss=正解）
 interface PairTags {
@@ -15,7 +15,7 @@ interface PairTags {
   confidences: string[];
 }
 
-/** records.json の評価済みペアを PairTags 形へ（タグ/confidence を重複排除） */
+/** loss_candidates_per_version_pair.json の評価済みペアを PairTags 形へ（タグ/confidence を重複排除） */
 const toPairTags = (records: DetectionRecord[]): PairTags[] =>
   records.filter(r => r.status === 'evaluated').map(r => ({
     lib: r.npm_pkg,
@@ -43,7 +43,7 @@ function evalPolicy(records: PairTags[], name: string, isLoss: (r: PairTags) => 
   return { name, ...m, precision: +precision.toFixed(3), recall: +recall.toFixed(3), f1: +f1.toFixed(3), accuracy: +accuracy.toFixed(3) };
 }
 
-/** 複数の損失定義ポリシーで混同行列を比較する（records.json 由来 → policy_sweep.json） */
+/** 複数の損失定義ポリシーで混同行列を比較する（loss_candidates_per_version_pair.json 由来 → policy_sweep.json） */
 function runPairTags(): void {
   const records = toPairTags(loadRecords());
 

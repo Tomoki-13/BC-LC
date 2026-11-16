@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { ANALYSIS_DIR, loadRecords } from '../utils/evalShared';
+import { RETURN_ANALYSIS_DIR, KEY_RESULTS_JSON, loadRecords } from '../utils/evalShared';
 
 /** detail "return: [ra] → [rb]" から pre/post の返り式を復元。入力: detail文字列 / 出力: {ra,rb} or null */
 function parseReturnDetail(detail: string): { ra: string; rb: string } | null {
@@ -12,7 +12,7 @@ function parseReturnDetail(detail: string): { ra: string; rb: string } | null {
 /** 返り式の本数（|| 区切りのセグメント数。空なら0）を数える */
 const countSegments = (expr: string): number => (expr.trim() === '' ? 0 : expr.split('||').length);
 
-/** return-changed 候補の内部兆候（返り値ドロップ/セグメント増減）を fail/succ 別に集計（records.json 由来 → return_analysis.json） */
+/** return-changed 候補の内部兆候（返り値ドロップ/セグメント増減）を fail/succ 別に集計（loss_candidates_per_version_pair.json 由来 → return_analysis.json） */
 function runReturnAnalysis(): void {
   const records = loadRecords().filter(r => r.status === 'evaluated');
 
@@ -44,10 +44,10 @@ function runReturnAnalysis(): void {
     .sort((a, b) => b.total - a.total);
   console.log('=== return-changed ペアの兆候別 内訳（fail=TP寄与, succ=FP寄与）===');
   console.table(rows);
-  const outputDir = path.resolve(process.cwd(), ANALYSIS_DIR, 'returnAnalysis');
+  const outputDir = path.resolve(process.cwd(), RETURN_ANALYSIS_DIR);
   fs.mkdirSync(outputDir, { recursive: true });
-  fs.writeFileSync(path.join(outputDir, 'return_analysis.json'), JSON.stringify(rows, null, 2));
-  console.log(`[Done] ${outputDir}/return_analysis.json`);
+  fs.writeFileSync(path.join(outputDir, KEY_RESULTS_JSON), JSON.stringify(rows, null, 2));
+  console.log(`[Done] ${outputDir}/${KEY_RESULTS_JSON}`);
 }
 
 if (process.argv[1] && /returnAnalysis\.(ts|js)$/.test(process.argv[1])) {

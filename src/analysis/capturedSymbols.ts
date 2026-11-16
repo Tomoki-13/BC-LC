@@ -4,16 +4,16 @@ import { execSync } from 'child_process';
 
 import OutputJson from '../utils/output_json';
 import {
-  PATTERNS_PATH, RECORDS_PATH, SURFACE_DIR, ANALYSIS_DIR, AUDIT_DIR, EXTRACTION_COVERAGE_DIR, CLONE_BASE,
+  PATTERNS_PATH, RECORDS_PATH, SURFACE_DIR, LOSS_FUNCTIONS_DIR, AUDIT_DIR, EXTRACTION_COVERAGE_DIR, KEY_RESULTS_JSON, CLONE_BASE,
   toCsvCell, toDirName, PatternRecord, DetectionRecord,
 } from '../utils/evalShared';
 import DiffSurface, { deriveSubpath } from '../libDiff/diffSurface';
 import type { ApiSurface, ApiSymbol } from '../types/LibDiff';
 
 // 損失と判定した API（＝パターン化した API。損失候補1件ごとにパターンを作るため一致する）を版ペアごとに列挙する（DIAGNOSE 等の既存手法との突き合わせ用）。
-//   入力: library-detect/records.json（損失候補）・patterns/patterns.json（生成パターン）・surface/（公開形）
-//         audit/resolution_log.csv＋lib clone の package.json（main＝ライブラリ本体のファイル）・results/extraction-coverage/dts_coverage.json（任意）
-//   出力: analysis/capturedSymbols/{loss_api_list.csv, by_lib.json, dts_gap.csv, summary.json}
+//   入力: intermediate_data/loss_candidates/（損失候補）・generated_patterns/all_patterns.json（生成パターン）・intermediate_data/api_surface/（公開形）
+//         audit/resolution_log.csv＋lib clone の package.json（main＝ライブラリ本体のファイル）・extracted_functions_vs_dts/key_results.json（任意）
+//   出力: loss_functions_list/{key_results.json, detail_loss_api_list.csv, detail_dts_gap.csv, breakdown_per_library.json}
 //   API の表記は DIAGNOSE（supplementary/detected_breaking_changes.csv の related_apis）に合わせる:
 //     本体の default export → <lib> / 本体の名前付き export・プロパティ → <lib>.name
 //     本体以外のファイル（サブパス）→ <lib/sub> / <lib/sub>.name / package.json 由来のタグ → <lib>
@@ -36,7 +36,7 @@ interface ApiRow {
   sourceSymbols: Set<string>; // 元の symbol@filePath（同じ API に複数の定義がまとまることがある）
 }
 
-// records.json の1件（採点用の DetectionRecord に失敗・成功数を足した実際の形）
+// loss_candidates_per_version_pair.json の1件（採点用の DetectionRecord に失敗・成功数を足した実際の形）
 interface LossRecord extends DetectionRecord {
   failCount: number;
   succCount: number;
@@ -155,7 +155,7 @@ export function runCapturedSymbols(): void {
     a.library.localeCompare(b.library) || a.updatedVersion.localeCompare(b.updatedVersion, undefined, { numeric: true })
     || a.api.localeCompare(b.api) || a.tag.localeCompare(b.tag));
 
-  const outDir = path.resolve(process.cwd(), ANALYSIS_DIR, 'capturedSymbols');
+  const outDir = path.resolve(process.cwd(), LOSS_FUNCTIONS_DIR);
   OutputJson.createOutputDirectory(outDir);
 
   // loss_api_list.csv（版ペア × API × タグの1行）
@@ -164,9 +164,9 @@ export function runCapturedSymbols(): void {
     csv.push([r.library, r.prevVersion, r.updatedVersion, r.api, r.tag, r.confidence,
       r.lossByClientTest, r.failCount, r.succCount, [...r.sourceSymbols].join(' ')].map(toCsvCell).join(','));
   }
-  fs.writeFileSync(path.join(outDir, 'loss_api_list.csv'), csv.join('\n') + '\n');
+  fs.writeFileSync(path.join(outDir, 'detail_loss_api_list.csv'), csv.join('\n') + '\n');
 
-  // by_lib.json（ライブラリごとに API 単位でまとめたもの。どの版ペアでどのタグが付いたか）
+  // breakdown_per_library.json（ライブラリごとに API 単位でまとめたもの。どの版ペアでどのタグが付いたか）
   const byLib: Record<string, Record<string, { tags: string[]; pairs: string[] }>> = {};
   for (const r of sorted) {
     const apis = (byLib[r.library] ??= {});
@@ -175,18 +175,18 @@ export function runCapturedSymbols(): void {
     const pair = `${r.prevVersion}__${r.updatedVersion}`;
     if (!a.pairs.includes(pair)) a.pairs.push(pair);
   }
-  fs.writeFileSync(path.join(outDir, 'by_lib.json'), JSON.stringify(byLib, null, 2));
+  fs.writeFileSync(path.join(outDir, 'breakdown_per_library.json'), JSON.stringify(byLib, null, 2));
 
   // dts_gap.csv（.d.ts 宣言のうち surface が捕捉できなかったもの）
-  const dts = readJson(path.resolve(process.cwd(), EXTRACTION_COVERAGE_DIR, 'dts_coverage.json'));
+  const dts = readJson(path.resolve(process.cwd(), EXTRACTION_COVERAGE_DIR, KEY_RESULTS_JSON));
   const dtsGap = ((dts?.records ?? []) as DtsRecord[]).filter(d => d.hasDts && d.missing && d.missing.length > 0);
   const dtsRows = ['lib,version,coverage,missingCount,missing'];
   for (const g of dtsGap) {
     dtsRows.push([g.libName, g.version, g.coverage ?? '', g.missing!.length, g.missing!.join(' ')].map(toCsvCell).join(','));
   }
-  fs.writeFileSync(path.join(outDir, 'dts_gap.csv'), dtsRows.join('\n') + '\n');
+  fs.writeFileSync(path.join(outDir, 'detail_dts_gap.csv'), dtsRows.join('\n') + '\n');
 
-  // summary.json
+  // key_results.json
   const uniqueApis = new Set(sorted.map(r => `${r.library}|${r.api}`));
   const byTag: Record<string, number> = {};
   for (const r of sorted) byTag[r.tag] = (byTag[r.tag] ?? 0) + 1;
@@ -200,7 +200,7 @@ export function runCapturedSymbols(): void {
     skippedCandidates,                                     // 損失なのにパターンが作れなかった候補数（0 のはず）
     dtsGapVersions: dtsGap.length,
   };
-  fs.writeFileSync(path.join(outDir, 'summary.json'), JSON.stringify(summary, null, 2));
+  fs.writeFileSync(path.join(outDir, KEY_RESULTS_JSON), JSON.stringify(summary, null, 2));
 
   console.log(`[capturedSymbols] 損失 API ${summary.rows} 行・版ペア ${summary.pairs}・ユニーク API ${summary.uniqueApis}`
     + `・パターンが作れなかった候補 ${skippedCandidates} → ${outDir}`);

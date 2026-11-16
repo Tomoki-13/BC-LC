@@ -15,6 +15,14 @@ function normalizeForRegex(code: string): string {
   return code.replace(/[\r\n]/g, '').replace(/\[[^\]]*\]/g, 'argument').replace(/\{[^}]*\}/g, 'argument');
 }
 
+// 対応する括弧の中身を内側から空にする（pump(a(b), c.d()) → pump()・pump(a).on(b) → pump().on()）
+//   usage 正規表現の引数部 [^)]* は最初の ) で止まり、引数の中の . をチェーンとみなすため、元の形で当たらないときに使う
+function collapseParens(code: string): string {
+  let s = code, prev = '';
+  while (s !== prev) { prev = s; s = s.replace(/\(([^()]*)\)/g, '\u0001\u0002'); }
+  return s.replace(/\u0001/g, '(').replace(/\u0002/g, ')');
+}
+
 // usage 正規表現が当たった後の妥当性チェック（型を持たない生成パターン向け＝現状の主判定）
 //   argCheck: 呼び出しの引数個数 argTypes.length ≥ minArgs
 //   removedKey: 削除キー名が 生コード or argContexts(解決値) に出現
@@ -116,7 +124,8 @@ function matchOne(pattern: GeneratedPattern, usageByFile: ExtractFunctionCallsRe
         const expectedTypes = usage.argTypes ?? []; // パターン側の引数型（将来ライブラリから予測して入れる想定・現状は空）
         let matched = false;
         for (let j = i + 1; j < blocks.length; j++) {
-          if (usageRe.test(normalizeForRegex(blocks[j].code))
+          const code = blocks[j].code;
+          if ((usageRe.test(normalizeForRegex(code)) || usageRe.test(normalizeForRegex(collapseParens(code))))
             && usageValid(pattern, blocks[j])
             && typesCompatible(expectedTypes, blocks[j].types, mode)) {
             matched = true;

@@ -5,7 +5,7 @@ import path from 'path';
 import OutputJson from '../utils/output_json';
 import {
   PATTERNS_PATH, CLIENTS_PATH, TEST_RESULT_PATH, CLIENT_REPOS_BASE,
-  CLIENT_DETECT_DIR, CLIENT_DISCUSSION_DIR, CHANGEVER_DIR, DETECT_STANDALONE_LATEST, DETECT_STANDALONE_HISTORY,
+  CLIENT_DETECT_DIR, CHANGEVER_DIR, KEY_RESULTS_JSON, groupDirOf, DETECT_STANDALONE_LATEST, DETECT_STANDALONE_HISTORY,
   loadRbcClientSet, hasRepoContent, isAtCommit, toCsvCell,
 } from '../utils/evalShared';
 import { type DetectLevel, DEFAULT_DETECT_LEVEL, DETECT_LEVEL_NAME, RUN_DETECT_LEVEL, RUN_SCOPE } from '../utils/runVariant';
@@ -19,7 +19,7 @@ import type { GeneratedPattern } from '../types/patternTypes';
 import type { ExtractFunctionCallsResult } from '../types/ExtractFunctionCallsResult';
 import type { ExtendedDetectionOutput, MatchClientPattern, PatternCount } from '../types/clientDetectTypes';
 
-/** patterns.json の1ペア（runDetection が出力） */
+/** all_patterns.json の1ペア（runDetection が出力） */
 interface PatternRecord {
   npm_pkg: string;
   prevVersion: string;
@@ -74,14 +74,14 @@ const rate = (d: number, n: number): number | null => (n > 0 ? Number((d / n).to
 /**
  * 実行モードと入出力の指定
  *   batch      : 一括実行（index.ts）から呼ぶ。出力はモードのフォルダ（latest/BC-LC/<scope-…_detect-…>/）の
- *                results/client-detection・discussion/client-detection・changever
+ *                detected_clients/・changeversion_input/
  *                前提（clients.json/クローン）が無ければ止めずに skip する
  *   standalone : make client-detect（単体）。出力は latest/BC-LC-detect＋history にスナップショット
  *                参照した patterns を複製し、無い前提は実行を促して終了する
  */
 export interface ClientDetectOptions {
   mode?: 'batch' | 'standalone';
-  patternsPath?: string;  // patterns.json（ファイル）or それらを含むディレクトリ。既定 = PATTERNS_PATH
+  patternsPath?: string;  // all_patterns.json（ファイル）or それらを含むディレクトリ。既定 = PATTERNS_PATH
   maxLibs?: number;
   outDir?: string;        // 出力先の明示指定（8lib 等を BC-LC-8lib/client-detect に分離するため。既定は mode から決定）
   detectLevel?: DetectLevel; // 検出の粒度（utils/runVariant）。既定 = 環境変数 BCLC_DETECT（make の DETECT=）→ 無ければ 2
@@ -133,7 +133,7 @@ function collectPatternFiles(target: string): string[] {
 
 /**
  * patterns を読み込む。入力: ファイル/ディレクトリ / 出力: 全レコード＋読んだファイル
- *   集約 patterns.json（配列）とペア分割ファイル（単体 PatternRecord）の両方を受ける
+ *   集約 all_patterns.json（配列）とペア分割ファイル（単体 PatternRecord）の両方を受ける
  *   同一ディレクトリに集約と分割が同居しても、ペアキーで重複排除して二重計上を防ぐ
  */
 function loadPatternRecords(target: string): { records: PatternRecord[]; files: string[] } {
@@ -151,14 +151,14 @@ function loadPatternRecords(target: string): { records: PatternRecord[]; files: 
   return { records: [...byPair.values()], files };
 }
 
-/** 版ペアのライブラリ側の損失判定（records.json 由来） */
+/** 版ペアのライブラリ側の損失判定（loss_candidates_per_version_pair.json 由来） */
 interface PairJudgement {
   judgement: 'loss' | 'no_loss' | 'not_analyzed';
   lossTags: string;          // loss の根拠のタグ（重複なし・';' 区切り）。それ以外は ''
   whyLossNotJudged: string;  // not_analyzed の理由（no_exports_extracted / library_clone_failed / no_repository_url 等）。それ以外は ''
 }
 
-// records.json の除外理由（reason の各要素）を、意味の読める英語にする
+// loss_candidates_per_version_pair.json の除外理由（reason の各要素）を、意味の読める英語にする
 const NOT_ANALYZED_REASON: Record<string, string> = {
   empty: 'no_exports_extracted',          // コードは取れたが export を1件も抽出できない
   'clone-failed': 'library_clone_failed', // ライブラリの clone に失敗
@@ -167,7 +167,7 @@ const NOT_ANALYZED_REASON: Record<string, string> = {
   'build-error': 'surface_extraction_failed',          // checkout はできたが surface の構築で失敗
 };
 
-/** records.json の reason（例 "pre(2.1.0):empty / post(3.0.0):empty"・"clone-failed"）を英語の理由にする */
+/** loss_candidates_per_version_pair.json の reason（例 "pre(2.1.0):empty / post(3.0.0):empty"・"clone-failed"）を英語の理由にする */
 function whyLossNotJudged(reason: string): string {
   return reason.split(' / ').map(part => {
     const m = /^(pre|post)\(([^)]*)\):(.+)$/.exec(part.trim());
@@ -176,14 +176,18 @@ function whyLossNotJudged(reason: string): string {
 }
 
 /**
- * パターンと同じ実行の library-detect/records.json から版ペアごとの損失判定を読む（無ければ空）
- *   patterns ファイルが <base>/patterns/patterns.json なら <base>/library-detect/records.json を見る
+ * パターンと同じ実行の損失候補から版ペアごとの損失判定を読む（無ければ空）
+ *   patterns ファイルが <base>/generated_patterns/all_patterns.json なら <base>/intermediate_data/loss_candidates/loss_candidates_per_version_pair.json を見る
+ *   2026-11-16 より前の構成（<base>/patterns/patterns.json → <base>/library-detect/loss_candidates_per_version_pair.json）も読む
  */
 function loadJudgements(patternFiles: string[]): { judgements: Map<string, PairJudgement>; unevaluated: PatternRecord[] } {
   const judgements = new Map<string, PairJudgement>();
   const unevaluated: PatternRecord[] = [];
   const recordsPath = patternFiles
-    .map(f => path.join(path.dirname(path.dirname(f)), 'library-detect', 'records.json'))
+    .flatMap(f => {
+      const base = path.dirname(path.dirname(f));
+      return [path.join(base, 'intermediate_data', 'loss_candidates', 'loss_candidates_per_version_pair.json'), path.join(base, 'library-detect', 'records.json')];
+    })
     .find(p => fs.existsSync(p));
   if (!recordsPath) return { judgements, unevaluated };
   for (const r of JSON.parse(fs.readFileSync(recordsPath, 'utf-8')) as any[]) {
@@ -238,7 +242,7 @@ async function detectBucket(
   // 検出したクライアント × 該当パターンの明細＋test 種別（手確認・検出集合の突合用）
   const detailed: { client: string; test: string; patterns: { tag: string; symbol: string; confidence: string }[] }[] = [];
   const clientDetails: ClientDetail[] = [];
-  // ソースコードのパターンだけで当たったクライアント（changever/ 用。changeversion は後続のリリースをコードのパターンで当て直す）
+  // ソースコードのパターンだけで当たったクライアント（changeversion_input/ 用。changeversion は後続のリリースをコードのパターンで当て直す）
   const codeDetectedClients: string[] = [];
   const codeMatchedPerClient: GeneratedPattern[][] = [];
   const codeMatchResults: MatchClientPattern[] = [];
@@ -344,7 +348,7 @@ async function detectBucket(
 }
 
 /**
- * changever/<lib>_<verKey>/ に、changeversion（ClientFixTrace/src/detect.ts）が読む形で書く（R-BC の method/<lib>_<verKey>/ と同じ並び）
+ * changeversion_input/<lib>_<verKey>/ に、changeversion（ClientFixTrace/src/detect.ts）が読む形で書く（R-BC の method/<lib>_<verKey>/ と同じ並び）
  *   createPattern/detectpatternlist.json : ソースコードのパターン（R-BC 形式。1パターン = [binding, usage…] の1組）
  *   createPattern/bclc_patterns.json     : 同じパターンの BC-LC 形式（引数の数・オプションのキーの条件つき。BC-LC の照合器で当て直す用）
  *   detectByPattern/{failure,success}_{detect,matchResults}.json : ソースコードのパターンだけで当たったクライアント
@@ -364,7 +368,7 @@ function writeChangeverPair(base: string, rec: PatternRecord, prefix: string, de
   fs.writeFileSync(path.join(detectDir, `${prefix}_matchResults.json`), JSON.stringify(matchResults, null, 2));
 }
 
-/** 補足情報の1行（clients_detail.csv） */
+/** 補足情報の1行（detail_clients.csv） */
 interface ClientDetailRow extends ClientDetail {
   group: GroupLabel;
   library: string;
@@ -375,8 +379,8 @@ interface ClientDetailRow extends ClientDetail {
 
 /**
  * クライアントごとの補足情報を書く（検出には使わない。確認用）
- *   clients_detail.csv    : 1行 = 群 × 版ペア × クライアント（クライアント名つき）
- *   supplement_counts.csv : 群 × 項目 × 値 ごとの件数（detected / not_detected の内訳つき）
+ *   detail_clients.csv           : 1行 = 群 × 版ペア × クライアント（クライアント名つき）
+ *   detail_supplement_counts.csv : 群 × 項目 × 値 ごとの件数（detected / not_detected の内訳つき）
  */
 function writeClientDetails(outBase: string, rows: ClientDetailRow[]): void {
   const header = 'client_group,library,prevVersion,updatedVersion,client,loss_judgement,detected,detected_by,hit_tags,'
@@ -384,7 +388,7 @@ function writeClientDetails(outBase: string, rows: ClientDetailRow[]): void {
   const lines = rows.map(r => [r.group, r.library, r.prevVersion, r.updatedVersion, r.client, r.lossJudgement,
     r.detected ? 'yes' : 'no', r.detectedBy.join('+'), r.hitTags.join(';'), r.whyNotDetected, r.libraryLink, r.linkDetail,
     r.testScript].map(toCsvCell).join(','));
-  fs.writeFileSync(path.join(outBase, 'clients_detail.csv'), [header, ...lines].join('\n') + '\n');
+  fs.writeFileSync(path.join(outBase, 'detail_clients.csv'), [header, ...lines].join('\n') + '\n');
 
   const attributes: [string, (r: ClientDetailRow) => string][] = [
     ['detected_by', r => (r.detected ? r.detectedBy.join('+') : '(not detected)')],
@@ -406,19 +410,19 @@ function writeClientDetails(outBase: string, rows: ClientDetailRow[]): void {
   const countLines = [...counts.entries()]
     .sort((a, b) => order(a[0]) - order(b[0]) || a[0].localeCompare(b[0]))
     .map(([k, c]) => [...k.split('\u0000'), c.clients, c.detected, c.clients - c.detected].map(toCsvCell).join(','));
-  fs.writeFileSync(path.join(outBase, 'supplement_counts.csv'),
+  fs.writeFileSync(path.join(outBase, 'detail_supplement_counts.csv'),
     ['client_group,attribute,value,clients,detected,not_detected', ...countLines].join('\n') + '\n');
 }
 
 /**
- * 群ごとの per_library_summary.csv と、全体の per_library_by_group.csv を書く
+ * 群ごとの breakdown_per_library.csv と、全体の breakdown_per_library_by_group.csv を書く
  *   detection_rate = detected / scanned（g1 では recall と同じ値）
  *   scanned_only_in_pairs_with_patterns = パターンを作れた（1件以上ある）版ペアの走査数、detection_rate_only_in_pairs_with_patterns = detected / それ
  *   （パターン0件の版ペアでは検出が起き得ないので detected はすべてパターンのある版ペアに属する）
  * ライブラリの行の後に集計の4行を置く（率はライブラリごとの率の平均・中央値。走査数 0 のライブラリは率の計算から除く）
  *   TOTAL / MEDIAN          : 全版ペア（件数は合計）
  *   TP_TOTAL / TP_MEDIAN    : 損失ありと判定した版ペアだけ（g1・g2 は失敗のある版ペアなので TP。g3 は全員成功なので FP_）
- *   クライアント単位で合算した率は summary.json の recall / detectionRate
+ *   クライアント単位で合算した率は key_results.json の recall / detectionRate
  */
 function writeLibraryCsvs(outBase: string, groups: Map<GroupLabel, GroupAgg>, pairRows: Map<GroupLabel, PairRow[]>): void {
   const fmt = (d: number, n: number) => (n > 0 ? (d / n).toFixed(3) : '');
@@ -458,15 +462,15 @@ function writeLibraryCsvs(outBase: string, groups: Map<GroupLabel, GroupAgg>, pa
     }
     const prefix = g === GROUPS.successInSuccessPair ? 'FP_' : 'TP_';
     rows.push(...summaryRows(prefix, [...judgedLoss.values()], `pairs judged as loss (${prefix.slice(0, 2)}); `));
-    const dir = path.join(outBase, g);
+    const dir = groupDirOf(outBase, g);
     OutputJson.createOutputDirectory(dir);
-    fs.writeFileSync(path.join(dir, 'per_library_summary.csv'), [header, ...rows].join('\n') + '\n');
+    fs.writeFileSync(path.join(dir, 'breakdown_per_library.csv'), [header, ...rows].join('\n') + '\n');
     all.push(...rows.map(r => `${g},${r}`));
   }
-  fs.writeFileSync(path.join(outBase, 'per_library_by_group.csv'), all.join('\n') + '\n');
+  fs.writeFileSync(path.join(outBase, 'breakdown_per_library_by_group.csv'), all.join('\n') + '\n');
 }
 
-/** 版ペアごとの1行（群ごとの per_pair_summary.csv） */
+/** 版ペアごとの1行（群ごとの breakdown_per_version_pair.csv） */
 interface PairRow {
   library: string;
   prevVersion: string;
@@ -493,7 +497,7 @@ function detectionStatus(r: PairRow): string {
   return r.clientsDetected > 0 ? 'detected' : 'none_detected';   // 1件以上検出 / 照合したが0件
 }
 
-/** 群ごとの合計（summary.json の pairTable。CSV には合計行を入れない） */
+/** 群ごとの合計（key_results.json の pairTable。CSV には合計行を入れない） */
 interface PairTableTotals {
   pairs: number;
   pairsLibraryNotAnalyzed: number;
@@ -505,9 +509,9 @@ interface PairTableTotals {
 }
 
 /**
- * 群ごとの per_pair_summary.csv と、全体の per_pair_by_group.csv を書く（版ペア × 群の1行・合計行なし）
- *   loss_judgement / loss_tags / why_loss_not_judged = ライブラリ側の損失判定（records.json）
- *   detection_status = 検出側の状態。合計は summary.json の groups.<群>.pairTable に出す
+ * 群ごとの breakdown_per_version_pair.csv と、全体の breakdown_per_version_pair_by_group.csv を書く（版ペア × 群の1行・合計行なし）
+ *   loss_judgement / loss_tags / why_loss_not_judged = ライブラリ側の損失判定（loss_candidates_per_version_pair.json）
+ *   detection_status = 検出側の状態。合計は key_results.json の groups.<群>.pairTable に出す
  */
 function writePairCsvs(outBase: string, pairRows: Map<GroupLabel, PairRow[]>): Record<string, PairTableTotals> {
   const fmt = (d: number, n: number) => (n > 0 ? (d / n).toFixed(3) : '');
@@ -523,9 +527,9 @@ function writePairCsvs(outBase: string, pairRows: Map<GroupLabel, PairRow[]>): R
     const rows = (pairRows.get(g) ?? []).sort((a, b) => a.library.localeCompare(b.library)
       || a.updatedVersion.localeCompare(b.updatedVersion, undefined, { numeric: true }));
     const lines = rows.map(row);
-    const dir = path.join(outBase, g);
+    const dir = groupDirOf(outBase, g);
     OutputJson.createOutputDirectory(dir);
-    fs.writeFileSync(path.join(dir, 'per_pair_summary.csv'), [header, ...lines].join('\n') + '\n');
+    fs.writeFileSync(path.join(dir, 'breakdown_per_version_pair.csv'), [header, ...lines].join('\n') + '\n');
     all.push(...lines.map(l => `${g},${l}`));
     const sum = (f: (r: PairRow) => number) => rows.reduce((n, r) => n + f(r), 0);
     const byStatus: Record<string, number> = {};
@@ -543,7 +547,7 @@ function writePairCsvs(outBase: string, pairRows: Map<GroupLabel, PairRow[]>): R
       byDetectionStatus: byStatus,
     };
   }
-  fs.writeFileSync(path.join(outBase, 'per_pair_by_group.csv'), all.join('\n') + '\n');
+  fs.writeFileSync(path.join(outBase, 'breakdown_per_version_pair_by_group.csv'), all.join('\n') + '\n');
   return totals;
 }
 
@@ -559,7 +563,7 @@ function rateStats(rates: number[]): RateStats {
 }
 
 /**
- * ライブラリ単位・版ペア単位の検出率の平均と中央値（summary.json の groups.<群>.averages）
+ * ライブラリ単位・版ペア単位の検出率の平均と中央値（key_results.json の groups.<群>.averages）
  *   byLibrary: ライブラリごとに 検出 / 走査（そのライブラリの版ペアを合算）を出し、ライブラリを同じ重みで平均
  *   byPair:    版ペアごとの 検出 / 走査 を、版ペアを同じ重みで平均
  *   all = 走査数 > 0 の版ペアすべて / onlyPairsWithPatterns = そのうちパターンを作れた（1件以上ある）版ペアだけ
@@ -620,9 +624,9 @@ async function detectAll(
   outBase: string,
   maxLibs: number,
   rbcSet: Set<string>, // R-BC が評価したクライアント集合（"lib|client"）。ゾーン分け用
-  judgements: Map<string, PairJudgement> = new Map(), // 版ペアの損失判定（records.json）。unevaluated の版ペアは照合しない
+  judgements: Map<string, PairJudgement> = new Map(), // 版ペアの損失判定（loss_candidates_per_version_pair.json）。unevaluated の版ペアは照合しない
   level: DetectLevel = DEFAULT_DETECT_LEVEL,
-  discussionBase: string = outBase,      // 検出の明細・補足情報の置き場（一括実行では discussion/client-detection）
+  discussionBase: string = outBase,      // 検出の明細・補足情報の置き場（今は outBase と同じ）
   changeverBase: string | null = null,   // changeversion 用の出力先（一括実行のときだけ）
 ) {
   const clientDetailRows: ClientDetailRow[] = [];
@@ -699,7 +703,7 @@ async function detectAll(
       }
 
       // 群ディレクトリ配下に版ペアごとの検出結果（ファイル名は従来どおり failure_/success_ ＝ changeversion と同じ命名）
-      const dir = path.join(outBase, b.group, pair);
+      const dir = path.join(groupDirOf(outBase, b.group), pair);
       OutputJson.createOutputDirectory(dir);
       fs.writeFileSync(path.join(dir, `${b.prefix}_detect.json`), JSON.stringify(res.detect, null, 2));
       fs.writeFileSync(path.join(dir, `${b.prefix}_matchResults.json`), JSON.stringify(res.matchResults, null, 2));
@@ -753,7 +757,7 @@ async function detectAll(
   process.stderr.write('\n');
 
   // 検出クライアント集約を1ファイルで（後段の検出集合突合が walk 不要で済む）
-  fs.writeFileSync(path.join(discussionBase, 'detected_clients.json'), JSON.stringify(detectedIndex, null, 2));
+  fs.writeFileSync(path.join(discussionBase, 'detail_detected_clients.json'), JSON.stringify(detectedIndex, null, 2));
   writeLibraryCsvs(outBase, groups, pairRows);
   const pairTables = writePairCsvs(outBase, pairRows);
   writeClientDetails(discussionBase, clientDetailRows);
@@ -762,9 +766,9 @@ async function detectAll(
     generatedAt: new Date().toISOString(),
     detectLevel: { level, name: DETECT_LEVEL_NAME[level] }, // 検出の粒度（DetectLevel）
     countingUnit: 'クライアント×版ペア（同一クライアントが複数の版ペアに出ると重複して数える）',
-    // unevaluatedPairs = ライブラリ側を解析できず照合しなかった版ペア（per_pair_summary.csv の detection_status=library_not_analyzed）
+    // unevaluatedPairs = ライブラリ側を解析できず照合しなかった版ペア（breakdown_per_version_pair.csv の detection_status=library_not_analyzed）
     coverage: { patternPairs: patternRecs.length - unevaluatedPairs, libsProcessed: libs.length, evaluatedPairs: perPair.length, failedPairs, successOnlyPairs, unevaluatedPairs },
-    // pairTable = per_pair_summary.csv の合計（照合しなかった版ペア・クライアントも含めた数）
+    // pairTable = breakdown_per_version_pair.csv の合計（照合しなかった版ペア・クライアントも含めた数）
     // averages = ライブラリ単位・版ペア単位の平均と中央値（上の recall / detectionRate はクライアント単位の合算）
     groups: Object.fromEntries(GROUP_ORDER.map(g => [g, {
       ...groupSummary(g, groups.get(g)!), averages: averageRates(pairRows.get(g) ?? []), pairTable: pairTables[g],
@@ -843,13 +847,11 @@ export async function runClientDetect(opts: ClientDetectOptions = {}): Promise<v
   const outBase = path.resolve(process.cwd(), opts.outDir ?? (mode === 'batch' ? CLIENT_DETECT_DIR : DETECT_STANDALONE_LATEST));
   fs.rmSync(outBase, { recursive: true, force: true });
   OutputJson.createOutputDirectory(outBase);
-  // 一括実行（出力先の指定なし）では、補足情報を discussion/ に、changeversion 用を changever/ に分ける
+  // 一括実行（出力先の指定なし）では、changeversion 用を changeversion_input/ に分ける
   const isRunVariant = mode === 'batch' && !opts.outDir;
-  const discussionBase = isRunVariant ? path.resolve(process.cwd(), CLIENT_DISCUSSION_DIR) : outBase;
+  const discussionBase = outBase;
   const changeverBase = isRunVariant ? path.resolve(process.cwd(), CHANGEVER_DIR) : null;
   if (isRunVariant) {
-    fs.rmSync(discussionBase, { recursive: true, force: true });
-    OutputJson.createOutputDirectory(discussionBase);
     fs.rmSync(changeverBase!, { recursive: true, force: true });
     OutputJson.createOutputDirectory(changeverBase!);
   }
@@ -868,11 +870,11 @@ export async function runClientDetect(opts: ClientDetectOptions = {}): Promise<v
       generatedAt: summary.generatedAt,
     }, null, 2));
   }
-  fs.writeFileSync(path.join(outBase, 'summary.json'), JSON.stringify(summary, null, 2));
+  fs.writeFileSync(path.join(outBase, KEY_RESULTS_JSON), JSON.stringify(summary, null, 2));
 
   // 参照した patterns の出所を記録。standalone は patterns 実体も複製して「検出結果とパターン」を一緒に残す
   const resolvedPatternFiles = patternFiles.map(f => path.relative(process.cwd(), f));
-  fs.writeFileSync(path.join(outBase, 'source.json'), JSON.stringify(
+  fs.writeFileSync(path.join(outBase, 'detail_detection_input_source.json'), JSON.stringify(
     { mode, patternsInput: path.relative(process.cwd(), path.resolve(process.cwd(), patternsInput)),
       patternFiles: resolvedPatternFiles, patternRecordCount: patternRecs.length, generatedAt: summary.generatedAt },
     null, 2));

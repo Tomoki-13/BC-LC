@@ -11,10 +11,11 @@ import { reverseDependencies } from '../../astRelated/trace/reverseDependencies'
 
 // 読み込み記法の空白の揺れをそろえる（パターンは require('lib') / from 'lib' の形で書くため）
 // 例: require ('lib') → require('lib') / require( 'lib' ) → require('lib') / from'lib' → from 'lib'
-const normalizeImportSpacing = (code: string): string => code
+// from は語の途中（'resolve-from' など）では置き換えない
+export const normalizeImportSpacing = (code: string): string => code
   .replace(/\b(require|import)\s*\(\s*(?=["'`])/g, '$1(')
   .replace(/(\b(?:require|import)\(["'`][^"'`]*["'`])\s*\)/g, '$1)')
-  .replace(/\bfrom\s*(?=["'`])/g, 'from ');
+  .replace(/(?<![\w$.-])from\s*(?=["'`])/g, 'from ');
 
 // mode 0:使用方法をそのまま, 1:使用方法の一部抽象化でパターンに使いやすく
 // クライアントの「ライブラリ使用（import 行＋実際の呼び出し）」を ExtractFunctionCallsResult[][] に抽出する

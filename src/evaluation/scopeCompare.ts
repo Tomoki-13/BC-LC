@@ -10,7 +10,7 @@ import { runGroundTruth } from './groundTruth';
 import type { ScopeMode, ApiUsage, ApiSurface } from '../types/LibDiff';
 import { extractRepositoryUrl } from '../utils/npmRegistry';
 import {
-  CLONE_BASE, GROUND_TRUTH_PATH, SCOPE_COMPARE_DIR, toDirName,
+  CLONE_BASE, GROUND_TRUTH_PATH, SCOPE_COMPARE_DIR, KEY_RESULTS_JSON, toDirName,
   loadGroundTruth, groupByLib, fetchPackument, computeMetrics, buildSurfaceForVersion, emptyUsage,
 } from '../utils/evalShared';
 
@@ -98,10 +98,10 @@ export async function runScopeCompare(maxLibs: number = Infinity): Promise<void>
   const summary = { analyzable, unavailable, modes: modeRows };
   const outputDir = path.resolve(process.cwd(), SCOPE_COMPARE_DIR);
   OutputJson.createOutputDirectory(outputDir);
-  fs.writeFileSync(path.join(outputDir, 'scope_compare.json'), JSON.stringify(summary, null, 2));
+  fs.writeFileSync(path.join(outputDir, KEY_RESULTS_JSON), JSON.stringify(summary, null, 2));
   console.log(`analyzable=${analyzable} unavailable=${unavailable}`);
   console.table(modeRows);
-  console.log(`[Done] ${outputDir}/scope_compare.json`);
+  console.log(`[Done] ${outputDir}/${KEY_RESULTS_JSON}`);
 }
 
 if (process.argv[1] && /scopeCompare\.(ts|js)$/.test(process.argv[1])) {

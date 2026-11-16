@@ -34,16 +34,22 @@ export interface ExportedName {
  *   CJS  function Big(){}; Big.version='5'; module.exports = 〇〇
  *   ESM  export class C { static create(){} static MAX=1 } 
  */
-export const getExportedNames = async (filePath: string): Promise<ExportedName[]> => {
-  if (!filePath.match(/\.(js|jsx|ts|tsx|mjs|cjs|mts|cts)$/)) return [];
+export const getExportedNames = async (filePath: string): Promise<ExportedName[]> =>
+  (await getExportsAndImports(filePath)).names;
+
+/** 公開 export 名と、ファイル内の読み込み（ローカル名 → 指定子。`const x = require('glob')`・`import x from './y'`）を1回の parse で集める */
+export const getExportsAndImports = async (filePath: string): Promise<{ names: ExportedName[]; imports: Record<string, string> }> => {
+  const empty = { names: [], imports: {} };
+  if (!filePath.match(/\.(js|jsx|ts|tsx|mjs|cjs|mts|cts)$/)) return empty;
   let content: string;
   try {
     content = await fs.readFile(filePath, 'utf8');
   } catch {
-    return [];
+    return empty;
   }
   const parsed = createAstFromFile(filePath, content);
-  if (!parsed) return [];
+  if (!parsed) return empty;
+  const imports: Record<string, string> = {};
 
   const found = new Map<string, ExportStyle>();
   const origins = new Map<string, ReexportOrigin>();
@@ -86,6 +92,10 @@ export const getExportedNames = async (filePath: string): Promise<ExportedName[]
         const { id, init } = path.node;
         if (t.isIdentifier(id) && init && t.isObjectExpression(init)) objectLiteralVars.set(id.name, init);
         if (t.isIdentifier(id) && init) varInits.set(id.name, init);
+        // const x = require('x') / require('x').y
+        const req = t.isMemberExpression(init) ? init.object : init;
+        if (t.isIdentifier(id) && t.isCallExpression(req) && t.isIdentifier(req.callee, { name: 'require' })
+          && req.arguments.length === 1 && t.isStringLiteral(req.arguments[0])) imports[id.name] = req.arguments[0].value;
         if (t.isIdentifier(id) && init && t.isClassExpression(init)) classStatics.set(id.name, classStaticMembers(init));
       },
       ClassDeclaration(path) {
@@ -93,6 +103,7 @@ export const getExportedNames = async (filePath: string): Promise<ExportedName[]
       },
       ImportDeclaration(path) {
         const spec = path.node.source.value;
+        for (const sp of path.node.specifiers) imports[sp.local.name] = spec;
         if (!spec.startsWith('.')) return;
         for (const sp of path.node.specifiers) {
           if (t.isImportDefaultSpecifier(sp)) importOrigins.set(sp.local.name, { spec, imported: 'default' });
@@ -221,7 +232,8 @@ export const getExportedNames = async (filePath: string): Promise<ExportedName[]
     if (exportRoots.has(cls)) for (const m of members) add(m, 'esm-named'); // 例: export class C { static create }
   }
 
-  return [...found].map(([name, exportStyle]) => (origins.has(name)
+  const names = [...found].map(([name, exportStyle]) => (origins.has(name)
     ? { name, exportStyle, from: origins.get(name) }
     : { name, exportStyle }));
+  return { names, imports };
 };

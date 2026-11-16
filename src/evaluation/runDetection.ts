@@ -12,7 +12,7 @@ import { extractRepositoryUrl } from '../utils/npmRegistry';
 import { diffDeps } from '../depImpact/depDiff';
 import { generatePatterns } from '../patternGen/generatePatterns';
 import {
-  CLONE_BASE, GROUND_TRUTH_PATH, LIBRARY_DETECT_DIR, PATTERNS_DIR, SURFACE_DIR, AUDIT_DIR, EXTRACTION_COVERAGE_DIR, GroundTruthPair, DetectionRecord, LossCandidate,
+  CLONE_BASE, GROUND_TRUTH_PATH, LIBRARY_DETECT_DIR, PATTERNS_DIR, PATTERNS_PATH, RECORDS_PATH, KEY_RESULTS_JSON, KEY_RESULTS_CSV, SURFACE_DIR, AUDIT_DIR, EXTRACTION_COVERAGE_DIR, GroundTruthPair, DetectionRecord, LossCandidate,
   PatternRecord, toDirName, loadGroundTruth, groupByLib, fetchPackument,
   ExcludeReason, Analyzability, classifyAnalyzability,
 } from '../utils/evalShared';
@@ -55,11 +55,11 @@ function diffSurfaceSymbols(pre: any, post: any): {
 
 /**
  * ground_truth 全ペアに P2 検出（clone→surface→diff）を1回だけ実行し，
- * 損失候補を records.json に書き出す。採点(compare)/分析(analysis)はこの出力を読むだけ
+ * 損失候補を loss_candidates_per_version_pair.json に書き出す。採点(compare)/分析(analysis)はこの出力を読むだけ
  *   入力: maxLibs（先頭N libのパイロット用。既定=全件）。API の範囲は実行モード（runVariant の RUN_SCOPE）
- *   出力: work/library-detect/records.json（DetectionRecord 配列＝損失有無）
- *        work/patterns/patterns.json（PatternRecord 配列＝R-BC 形式の検出パターン。client-detect の照合入力）
- *        work/surface/（判定に使った surface）・results/extraction-coverage/dts_coverage.json・audit/ に解決ログ
+ *   出力: intermediate_data/loss_candidates/loss_candidates_per_version_pair.json（DetectionRecord 配列＝損失有無）
+ *        generated_patterns/all_patterns.json（PatternRecord 配列＝R-BC 形式の検出パターン。client-detect の照合入力）・key_results.csv（タグごとのパターン数）
+ *        intermediate_data/api_surface/（判定に使った surface）・extracted_functions_vs_dts/key_results.json・audit/ に解決ログ
  */
 export async function runDetection(maxLibs: number = Infinity): Promise<void> {
   phase('judge+generate');
@@ -189,15 +189,32 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
 
   const outputDir = path.resolve(process.cwd(), LIBRARY_DETECT_DIR);
   OutputJson.createOutputDirectory(outputDir);
-  fs.writeFileSync(path.join(outputDir, 'records.json'), JSON.stringify(records, null, 2));
+  fs.writeFileSync(path.resolve(process.cwd(), RECORDS_PATH), JSON.stringify(records, null, 2));
 
   const patternsDir = path.resolve(process.cwd(), PATTERNS_DIR);
   OutputJson.createOutputDirectory(patternsDir);
-  fs.writeFileSync(path.join(patternsDir, 'patterns.json'), JSON.stringify(patternRecords, null, 2));
+  fs.writeFileSync(path.resolve(process.cwd(), PATTERNS_PATH), JSON.stringify(patternRecords, null, 2));
 
-  // バージョンペア単位でも分割して出す（patterns.json は全体集約で手で確認しづらいため）
-  //   patterns/by-lib/<lib>/<prev>__<upd>.json ＝ その遷移の PatternRecord 単体
-  const byLibDir = path.join(patternsDir, 'by-lib');
+  // タグごとのパターン数（patterns＝パターンの数・version_pairs＝そのタグのパターンを1件以上持つバージョンペアの数）
+  const byTag = new Map<string, { patterns: number; pairs: number }>();
+  for (const r of patternRecords) {
+    const counts = new Map<string, number>();
+    for (const pt of r.patterns) counts.set(pt.tag, (counts.get(pt.tag) ?? 0) + 1);
+    for (const [tag, n] of counts) {
+      const t = byTag.get(tag) ?? { patterns: 0, pairs: 0 };
+      t.patterns += n; t.pairs += 1;
+      byTag.set(tag, t);
+    }
+  }
+  const tagRows = [...byTag.entries()].sort((a, b) => b[1].patterns - a[1].patterns).map(([tag, t]) => `${tag},${t.pairs},${t.patterns}`);
+  const pairsWithPatterns = patternRecords.filter(r => r.patterns.length > 0).length;
+  const allPatterns = patternRecords.reduce((n, r) => n + r.patterns.length, 0);
+  fs.writeFileSync(path.join(patternsDir, KEY_RESULTS_CSV),
+    ['tag,version_pairs,patterns', ...tagRows, `(all tags),${pairsWithPatterns},${allPatterns}`].join('\n') + '\n');
+
+  // バージョンペア単位でも分割して出す（all_patterns.json は全体集約で手で確認しづらいため）
+  //   generated_patterns/per_version_pair/<lib>/<prev>__<upd>.json ＝ その遷移の PatternRecord 単体
+  const byLibDir = path.join(patternsDir, 'per_version_pair');
   fs.rmSync(byLibDir, { recursive: true, force: true }); // 前回の残骸を残さない
   for (const r of patternRecords) {
     if (r.patterns.length === 0) continue; // 損失候補が無い遷移は書かない
@@ -208,7 +225,7 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
   }
 
   // 判定に使った surface を「判定する先（post 版）」ごとに残す（同一 run で同時に作った pre/post をその判定単位でまとめる）
-  //   surface/<lib>/<postver>/{pre,post,diff}.json
+  //   intermediate_data/api_surface/<lib>/<postver>/{pre,post,diff}.json
   //     pre.json / post.json ＝ その版の完全な surface（後から再判定に使える）
   //     diff.json            ＝ pre/post で同じ symbol を削除した変化分のみ（変化点を素早く見る用）
   const surfaceDir = path.resolve(process.cwd(), SURFACE_DIR);
@@ -223,7 +240,7 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
     fs.writeFileSync(path.join(pairDir, 'diff.json'), JSON.stringify({ ...meta, ...diffSurfaceSymbols(s.pre, s.post) }, null, 2));
   }
 
-  // .d.ts 妥当性検証を results/extraction-coverage へ（型定義がある版だけを records に載せ、無い版は件数だけ）
+  // .d.ts 妥当性検証を extracted_functions_vs_dts/ へ（型定義がある版だけを records に載せ、無い版は件数だけ）
   const auditDir = path.resolve(process.cwd(), AUDIT_DIR);
   OutputJson.createOutputDirectory(auditDir);
   const coverageDir = path.resolve(process.cwd(), EXTRACTION_COVERAGE_DIR);
@@ -242,15 +259,15 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
     nameCoverage: { declared, captured, coverage: declared ? +(captured / declared).toFixed(3) : null }, // 名前単位（全版の合計）
     records: withDts,
   };
-  fs.writeFileSync(path.join(coverageDir, 'dts_coverage.json'), JSON.stringify(dtsSummary, null, 2));
+  fs.writeFileSync(path.join(coverageDir, KEY_RESULTS_JSON), JSON.stringify(dtsSummary, null, 2));
 
   logger.flush(auditDir, 'runDetection'); // 監査ログは audit/ へ
   const evaluated = records.filter(r => r.status === 'evaluated').length;
   const totalPatterns = patternRecords.reduce((n, r) => n + r.patterns.length, 0);
-  console.log(`[Done] records=${records.length} (evaluated=${evaluated}, excluded=${records.length - evaluated}) → ${outputDir}/records.json`);
-  console.log(`[Done] patterns=${totalPatterns} (pairs=${patternRecords.length}) → ${patternsDir}/patterns.json`);
+  console.log(`[Done] records=${records.length} (evaluated=${evaluated}, excluded=${records.length - evaluated}) → ${RECORDS_PATH}`);
+  console.log(`[Done] patterns=${totalPatterns} (pairs=${patternRecords.length}) → ${PATTERNS_PATH}`);
   console.log(`[Done] surface=${surfacePairs.length} pairs → ${surfaceDir}/<lib>/<postver>/{pre,post,diff}.json`);
-  console.log(`[Done] dts: ${withDts.length}/${dtsRecords.length} 版に型定義あり (avgCoverage=${dtsSummary.avgCoverage}) → ${coverageDir}/dts_coverage.json`);
+  console.log(`[Done] dts: ${withDts.length}/${dtsRecords.length} 版に型定義あり (avgCoverage=${dtsSummary.avgCoverage}) → ${coverageDir}/${KEY_RESULTS_JSON}`);
 }
 
 // CLI 直接実行時のみ走らせる（import 時は走らせない）

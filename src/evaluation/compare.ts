@@ -4,7 +4,7 @@ import path from 'path';
 
 import OutputJson from '../utils/output_json';
 import {
-  LOSS_JUDGEMENT_DIR, LOSS_DISCUSSION_DIR, DetectionRecord, toCsvCell, loadRecords, computeMetrics,
+  LOSS_JUDGEMENT_DIR, LOSS_BY_TAG_DIR, KEY_RESULTS_JSON, KEY_RESULTS_CSV, DetectionRecord, toCsvCell, loadRecords, computeMetrics,
 } from '../utils/evalShared';
 
 // 採点済み1ペア（各 CSV の1行。records の検出事実に正解ラベルを突き合わせた結果）
@@ -17,7 +17,7 @@ interface ScoredPair extends DetectionRecord {
 }
 
 /**
- * 検出事実(records.json)を正解と突き合わせて category を付ける。入力: DetectionRecord / 出力: ScoredPair
+ * 検出事実(loss_candidates_per_version_pair.json)を正解と突き合わせて category を付ける。入力: DetectionRecord / 出力: ScoredPair
  *   record.analyzability（runDetection が付けた型付きタグ）で扱いを分ける（reason 文字列は解釈しない）:
  *     external     → 混同行列の外（category=''）
  *     method-limit → 「予測=損失なし」で FN/TN に計上。コードは取れたのに export 0件＝手法の抽出限界
@@ -38,7 +38,7 @@ function scoreRecord(record: DetectionRecord): ScoredPair {
   return { ...record, predictedLoss, lossCount: record.candidates.length, tags, causes, category };
 }
 
-/** records.json を採点し，混同行列・指標・各CSVを eval/ に出力する（clone/surface は行わない） */
+/** loss_candidates_per_version_pair.json を採点し，混同行列・指標・各CSVを loss_judgement_accuracy/・loss_judgement_by_tag/ に出力する（clone/surface は行わない） */
 export function runCompare(): void {
   const scored = loadRecords().map(scoreRecord);
   // 混同行列に入る = evaluated ＋ 抽出限界(empty等)fold（category が付いたもの）／外部除外は category=''
@@ -82,22 +82,22 @@ export function runCompare(): void {
     metrics,
   };
 
-  // 混同行列・版ペアごとの判定は results/、除外した版ペア・タグ別 TP/FP は discussion/
+  // 混同行列・バージョンペアごとの判定・除外は loss_judgement_accuracy/、タグ別 TP/FP は loss_judgement_by_tag/
   const outputDir = path.resolve(process.cwd(), LOSS_JUDGEMENT_DIR);
-  const discussionDir = path.resolve(process.cwd(), LOSS_DISCUSSION_DIR);
+  const byTagDir = path.resolve(process.cwd(), LOSS_BY_TAG_DIR);
   OutputJson.createOutputDirectory(outputDir);
-  OutputJson.createOutputDirectory(discussionDir);
-  fs.writeFileSync(path.join(outputDir, 'compare_summary.json'), JSON.stringify(summary, null, 2));
+  OutputJson.createOutputDirectory(byTagDir);
+  fs.writeFileSync(path.join(outputDir, KEY_RESULTS_JSON), JSON.stringify(summary, null, 2));
 
   // 評価用 CSV（評価できたペア: test_result / 判定した損失の有無 / 原因）
   const evaluationHeader = 'npm_pkg,prevVersion,updatedVersion,test_result,predicted_loss,category,loss_count,tags,causes\n';
-  fs.writeFileSync(path.join(outputDir, 'evaluation.csv'), evaluationHeader + evaluatedRows.map(row =>
+  fs.writeFileSync(path.join(outputDir, 'detail_evaluated_version_pairs.csv'), evaluationHeader + evaluatedRows.map(row =>
     [row.npm_pkg, row.prevVersion, row.updatedVersion, row.state, row.predictedLoss ? 'yes' : 'no', row.category, row.lossCount, row.tags, row.causes].map(toCsvCell).join(','),
   ).join('\n'));
 
   // 除外 CSV（評価できなかったペアと理由）
   const excludedHeader = 'npm_pkg,prevVersion,updatedVersion,test_result,reason\n';
-  fs.writeFileSync(path.join(discussionDir, 'excluded_pairs.csv'), excludedHeader + excludedRows.map(row =>
+  fs.writeFileSync(path.join(outputDir, 'detail_excluded_version_pairs.csv'), excludedHeader + excludedRows.map(row =>
     [row.npm_pkg, row.prevVersion, row.updatedVersion, row.state, row.reason].map(toCsvCell).join(','),
   ).join('\n'));
 
@@ -112,17 +112,17 @@ export function runCompare(): void {
   const distributionRows = Object.entries(tagStats)
     .map(([tag, s]) => ({ tag, tp: s.tp, fp: s.fp, total: s.tp + s.fp, precision: +(s.tp / (s.tp + s.fp)).toFixed(3) }))
     .sort((a, b) => b.total - a.total);
-  fs.writeFileSync(path.join(discussionDir, 'label_distribution.csv'), 'tag,TP,FP,total,precision\n' +
+  fs.writeFileSync(path.join(byTagDir, KEY_RESULTS_CSV), 'tag,TP,FP,total,precision\n' +
     distributionRows.map(d => [d.tag, d.tp, d.fp, d.total, d.precision].join(',')).join('\n'));
 
   // 素の判定（後方互換）
   const detailHeader = 'npm_pkg,prevVersion,updatedVersion,lossByClientTest,predictedLoss,lossCount,status,reason\n';
-  fs.writeFileSync(path.join(outputDir, 'compare_detail.csv'), detailHeader + scored.map(row =>
+  fs.writeFileSync(path.join(outputDir, 'detail_judgement_per_version_pair.csv'), detailHeader + scored.map(row =>
     [row.npm_pkg, row.prevVersion, row.updatedVersion, row.lossByClientTest, row.predictedLoss, row.lossCount, row.status, row.reason].map(toCsvCell).join(','),
   ).join('\n'));
 
   console.log(JSON.stringify(summary, null, 2));
-  console.log(`[Done] loss-judgement=${outputDir}・discussion=${discussionDir}`);
+  console.log(`[Done] loss-judgement=${outputDir}・by-tag=${byTagDir}`);
 }
 
 // CLI 直接実行時のみ走らせる（import 時は走らせない）

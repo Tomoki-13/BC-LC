@@ -5,7 +5,7 @@ import path from 'path';
 import OutputJson from '../utils/output_json';
 import {
   PATTERNS_PATH, CLIENTS_PATH, TEST_RESULT_PATH, CLIENT_REPOS_BASE,
-  CLIENT_DETECT_DIR, CHANGEVER_DIR, KEY_RESULTS_JSON, groupDirOf, DETECT_STANDALONE_LATEST, DETECT_STANDALONE_HISTORY,
+  CLIENT_DETECT_DIR, CHANGEVER_DIR, KEY_RESULTS_JSON, groupDirOf, LATEST_BCLC_BASE, DETECT_STANDALONE_HISTORY,
   loadRbcClientSet, hasRepoContent, isAtCommit, toCsvCell,
 } from '../utils/evalShared';
 import { type DetectLevel, DEFAULT_DETECT_LEVEL, DETECT_LEVEL_NAME, RUN_DETECT_LEVEL, RUN_SCOPE } from '../utils/runVariant';
@@ -777,6 +777,22 @@ async function detectAll(
   };
 }
 
+/**
+ * 検出だけの実行の出力フォルダ名に使う、パターンの出所の名前
+ *   history/BC-LC/<実行>/… → <実行> ／ latest/BC-LC/<モード>/… → latest_<モード> ／ …/BC-LC/libDiff/…/<lib>/patterns → libDiff_<lib> ／ それ以外 → ファイル・フォルダ名
+ */
+export function detectOnlyLabel(patternsInput: string): string {
+  const parts = path.resolve(process.cwd(), patternsInput).split(path.sep);
+  const at = (name: string) => parts.findIndex((p, i) => p === name && parts[i + 1] === 'BC-LC');
+  const libDiff = parts.indexOf('libDiff');
+  let label: string;
+  if (libDiff >= 0) label = `libDiff_${parts[parts.length - 2] === 'patterns' ? parts[parts.length - 3] : parts[parts.length - 2] ?? ''}`;
+  else if (at('history') >= 0 && parts[at('history') + 2]) label = parts[at('history') + 2];
+  else if (at('latest') >= 0 && parts[at('latest') + 2]) label = `latest_${parts[at('latest') + 2]}`;
+  else label = path.basename(parts.join(path.sep)).replace(/\.json$/, '');
+  return label.replace(/[^a-zA-Z0-9_.-]/g, '_');
+}
+
 export async function runClientDetect(opts: ClientDetectOptions = {}): Promise<void> {
   const mode = opts.mode ?? 'standalone';
   const maxLibs = opts.maxLibs ?? Infinity;
@@ -842,9 +858,10 @@ export async function runClientDetect(opts: ClientDetectOptions = {}): Promise<v
     logEvent('warn', 'alldataset_clients が見つからず zone 分けは全て bclcOnly 扱い');
   }
 
-  // 出力先: outDir 明示指定が最優先（8lib を BC-LC-8lib/client-detect に分離）/ 無ければ batch=client-detect・standalone=BC-LC-detect
-  //   群別ディレクトリに作り直すので、前回の残骸（旧レイアウト含む）はどのモードでも掃除する
-  const outBase = path.resolve(process.cwd(), opts.outDir ?? (mode === 'batch' ? CLIENT_DETECT_DIR : DETECT_STANDALONE_LATEST));
+  // 出力先: outDir 明示指定が最優先（8lib を BC-LC-8lib/client-detect に分離）/ 無ければ batch=detected_clients/・standalone=latest/BC-LC/detect_only_…/
+  //   出力先のフォルダだけを消して作り直す（standalone では latest/BC-LC/ のほかのフォルダは残す）
+  const standaloneDir = `${LATEST_BCLC_BASE}/detect_only_${detectOnlyLabel(patternsInput)}_detect-${DETECT_LEVEL_NAME[level]}`;
+  const outBase = path.resolve(process.cwd(), opts.outDir ?? (mode === 'batch' ? CLIENT_DETECT_DIR : standaloneDir));
   fs.rmSync(outBase, { recursive: true, force: true });
   OutputJson.createOutputDirectory(outBase);
   // 一括実行（出力先の指定なし）では、changeversion 用を changeversion_input/ に分ける

@@ -25,13 +25,13 @@ VER   ?= 2.0.0
 COUNT ?= 5
 
 .PHONY: install collect sample run-sample run-uuid run-globby sample-uuid \
-        run detect compare setup prepare-clients clone-clients check-clients clone-clients-sample client-detect scope tag-analysis pair-tags return-analysis captured-symbols dep-impact show-result help run-8lib build-targets run-all-pairs
+        run detect compare setup prepare-clients clone-clients check-clients clone-clients-sample client-detect scope tag-analysis pair-tags return-analysis captured-symbols api-inventory run-summary dep-impact show-result help run-8lib build-targets run-all-pairs
 
 # 分析系のパイロット件数（先頭 N lib だけ。空なら全件）
 #   make scope N=5
 N ?=
 
-# 実行モード（make run の結果はモードごとのフォルダ latest/BC-LC/<VARIANT>/・history/BC-LC/<日時>_<VARIANT>/ に出る）
+# 実行モード（make run の結果は history/BC-LC/<日時>_<VARIANT>/ と latest/BC-LC/<VARIANT>/ に出る．latest/BC-LC/ には最後の make run の結果と，その後の検出だけの実行の結果だけが残る）
 #   SCOPE = 損失判定・パターン生成で外部 API とみなす範囲（空なら all）
 #     all     : 全 export
 #     doc     : リポジトリ内の全 .md（README・CHANGELOG・docs/ 以下など）の本文に名前が出てくる export
@@ -53,8 +53,8 @@ VARIANT := scope-$(SCOPE)_detect-$(DETECT_NAME)
 export BCLC_SCOPE  := $(SCOPE)
 export BCLC_DETECT := $(DETECT)
 
-# client-detect（単体）が参照するパターン（ファイル or ディレクトリ。空なら既定の latest/BC-LC/<VARIANT>/work/patterns/patterns.json）
-#   make client-detect PATTERNS=../outputs/history/BC-LC/<日時>_<VARIANT>/work/patterns/patterns.json
+# client-detect（単体）が参照するパターン（ファイル or ディレクトリ。空なら既定の latest/BC-LC/<VARIANT>/generated_patterns/all_patterns.json）
+#   make client-detect PATTERNS=../outputs/history/BC-LC/<日時>_<VARIANT>/generated_patterns/all_patterns.json
 PATTERNS ?=
 
 # ---------------------------------------------------------------
@@ -105,15 +105,15 @@ sample-uuid: ## uuid 3.4.0→8.0.0-beta.0 の1ペアだけ詳細出力（surface
 # 評価（詳細は README.md「評価パイプライン」）
 #   run     : フルパイプライン。検出(重い1パス)→採点→分析3種を一括
 #   detect  : 検出のみ（records.json だけ作り直す）
-#   compare : 採点のみ（既存 records.json を読み直して再採点。高速）
+#   compare : 採点のみ（既存の損失候補 intermediate_data/loss_candidates/ を読み直して再採点。高速）
 # ---------------------------------------------------------------
-run: ## フルパイプライン（正解生成→判定+生成→採点→分析→scope→client-detect）→ latest/BC-LC/<VARIANT>/・history/BC-LC/<日時>_<VARIANT>/。SCOPE=・DETECT= で実行モード
-	$(call run_logged,$(HIST)/BC-LC/$(RUN_ID)_$(VARIANT)/logs,$(HEAP) $(TSX) index.ts)
+run: ## フルパイプライン（正解生成→判定+生成→採点→分析→scope→client-detect）→ 実行中は history/BC-LC/<日時>_<VARIANT>/ に書き、最後に latest/BC-LC/ を空にして latest/BC-LC/<VARIANT>/ に写す。SCOPE=・DETECT= で実行モード
+	$(call run_logged,$(HIST)/BC-LC/$(RUN_ID)_$(VARIANT)/logs,BCLC_WRITE_TO=history $(HEAP) $(TSX) index.ts)
 
-detect: ## 判定+生成のみ → latest/BC-LC/<VARIANT>/work/{library-detect,patterns}/（＋ results/extraction-coverage/・ログは history/BC-LC/<日時>_<VARIANT>-detect/logs）
+detect: ## 判定+生成のみ → latest/BC-LC/<VARIANT>/intermediate_data/・generated_patterns/（＋ extracted_functions_vs_dts/・ログは history/BC-LC/<日時>_<VARIANT>-detect/logs）
 	$(call run_logged,$(HIST)/BC-LC/$(RUN_ID)_$(VARIANT)-detect/logs,$(HEAP) $(TSX) evaluation/runDetection.ts $(N))
 
-compare: ## 採点のみ（records.json を読み直す。検出はしない）→ latest/BC-LC/<VARIANT>/results/loss-judgement/
+compare: ## 採点のみ（損失候補を読み直す。検出はしない）→ latest/BC-LC/<VARIANT>/loss_judgement_accuracy/・loss_judgement_by_tag/
 	cd $(SRCDIR) && $(TSX) evaluation/compare.ts
 
 setup: ## 【本実行の前に1回】前処理を一括（targets.all 生成→検出入力生成→クライアントの clone とコミット合わせ・ログは history/setup/<日時>-setup/logs）
@@ -131,29 +131,35 @@ check-clients: ## [確認] clone-clients を何も変えずに数える（そろ
 clone-clients-sample: ## [検証] 5lib×5client を ../testclone に試し clone（本番の clientRepos は触らない）
 	cd $(SRCDIR) && CLONE_SAMPLE=1 $(TSX) setup/cloneClients.ts
 
-client-detect: ## [単体] 生成パターンをクライアントに照合 → latest/BC-LC-detect（＋history/BC-LC-detect/<日時>）。PATTERNS=パス/ディレクトリ・N=先頭lib数
+client-detect: ## [単体] 生成パターンをクライアントに照合 → latest/BC-LC/detect_only_<パターンの出所>_detect-<粒度>/（同じ名前のフォルダだけ作り直す・＋history/BC-LC-detect/<日時>）。PATTERNS=パス/ディレクトリ・N=先頭lib数
 	$(call run_logged,$(HIST)/BC-LC-detect/$(RUN_ID)/logs,$(HEAP) $(TSX) clientDetect/runClientDetect.ts $(PATTERNS) $(N))
 
 scope: ## 外部API絞り込み mode0/1/2/3 の精度比較だけ単独で（run にも含まれる・高コスト）
 	cd $(SRCDIR) && $(TSX) evaluation/scopeCompare.ts $(N)
 
-tag-analysis: ## タグ別に fail/succ を集計 (FPのノイズ源特定)
+tag-analysis: ## タグ別に fail/succ を集計 (FPのノイズ源特定) → other_analysis/tag_analysis/
 	cd $(SRCDIR) && $(TSX) analysis/tagAnalysis.ts
 
-pair-tags: ## 損失定義ポリシー掃引（records.json 由来）
+pair-tags: ## 損失定義ポリシー掃引（損失候補から）→ other_analysis/pair_tags/
 	cd $(SRCDIR) && $(TSX) analysis/pairTags.ts
 
 return-analysis: ## return-changed の内部兆候を分析
 	cd $(SRCDIR) && $(TSX) analysis/returnAnalysis.ts
 
-captured-symbols: ## 破壊検出＋パターン化した関数を列挙（.d.ts 未捕捉も突合）→ analysis/capturedSymbols/
+captured-symbols: ## 破壊検出＋パターン化した関数を列挙（.d.ts 未捕捉も突合）→ loss_functions_list/
 	cd $(SRCDIR) && $(TSX) analysis/capturedSymbols.ts
+
+api-inventory: ## 公開 API の一覧と .d.ts（名前・種類・引数の個数・Promise）・DIAGNOSE との突き合わせ → <RUN>/public_api_inventory/。RUN=実行のフォルダ（空なら latest のこのモード）・DIAGNOSE_GRAPHS=<dir>/<lib>@<version>.json
+	cd $(SRCDIR) && $(TSX) evaluation/publicApiInventory.ts $(if $(RUN),--run $(abspath $(RUN))) $(if $(DIAGNOSE_GRAPHS),--diagnose-graphs $(abspath $(DIAGNOSE_GRAPHS)))
 
 dep-impact: ## [調査] 間接依存起因の見落とし: FN vs TN の依存 major-bump 率（→ BC-sample/depImpact/）
 	cd $(SRCDIR) && $(TSX) depImpact/fnDepCorrelation.ts
 
-show-result: ## 直近の混同行列 (compare_summary.json) を表示
-	@cat ../outputs/latest/BC-LC/$(VARIANT)/results/loss-judgement/compare_summary.json
+run-summary: ## 実行全体のまとめだけ作り直す → latest/BC-LC/<VARIANT>/run_summary/（key_results.json・detail_per_version_pair.csv）
+	cd $(SRCDIR) && $(TSX) evaluation/runSummary.ts
+
+show-result: ## 直近の実行の一番大事な数値 (run_summary/key_results.json) を表示
+	@cat ../outputs/latest/BC-LC/$(VARIANT)/run_summary/key_results.json
 
 # ---------------------------------------------------------------
 help: ## このヘルプを表示

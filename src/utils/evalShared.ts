@@ -12,7 +12,12 @@ export const CLONE_BASE = '../../clonedata/lib_versions';
 // 一括実行の出力はモードごとのフォルダ（latest/BC-LC/<scope-…_detect-…>/）。同じモードの実行だけが上書きする
 //   結果は「何の結果か」ごとのフォルダに分け、各フォルダの一番大事な数値は key_results.<json|csv> に置く（1フォルダに1つ）
 //   breakdown_*＝内訳（タグ別・ライブラリ別・群別）／detail_*＝1行1件の明細。構成と列は docs/mechanics/output-reference.md
-export const RUN_OUTPUT_BASE = `../../outputs/latest/BC-LC/${RUN_VARIANT}`;
+export const LATEST_BCLC_BASE = '../../outputs/latest/BC-LC';
+export const RUN_LATEST_BASE = `${LATEST_BCLC_BASE}/${RUN_VARIANT}`;
+// make run（BCLC_WRITE_TO=history）は実行中 history/BC-LC/<RUN_ID>_<モード>/ に書き、最後に latest/BC-LC/ を空にして写す（index.ts の publishToLatest）
+//   それ以外（make detect・compare・scope など段だけの実行）は latest/BC-LC/<モード>/ を読み書きする
+export const RUN_HISTORY_BASE = `../../outputs/history/BC-LC/${process.env.BCPG_RUN_ID ?? 'no-run-id'}_${RUN_VARIANT}`;
+export const RUN_OUTPUT_BASE = process.env.BCLC_WRITE_TO === 'history' && process.env.BCPG_RUN_ID ? RUN_HISTORY_BASE : RUN_LATEST_BASE;
 const OUTPUT_BASE = RUN_OUTPUT_BASE;
 export const KEY_RESULTS_JSON = 'key_results.json';
 export const KEY_RESULTS_CSV = 'key_results.csv';
@@ -32,8 +37,7 @@ export const SURFACE_DIR = `${INTERMEDIATE_DIR}/api_surface`;                   
 export const CHANGEVER_DIR = `${OUTPUT_BASE}/changeversion_input`;                         // changeversion（ClientFixTrace）の入力と同じ形（R-BC の method/<lib>_<verKey>/ と同じ並び）
 /** detected_clients/ の中の群ごとのフォルダ（<群>/ にバージョンペアごとの照合の詳細と群の内訳） */
 export const groupDirOf = (clientDetectBase: string, group: string) => `${clientDetectBase}/per_group/${group}`;
-// 単体 client-detect の出力（一括の BC-LC を上書きしない別木）。latest は毎回入れ替え・history に日時スナップショット
-export const DETECT_STANDALONE_LATEST = '../../outputs/latest/BC-LC-detect';
+// 検出だけの実行（make client-detect）の出力。latest は latest/BC-LC/detect_only_<パターンの出所>_detect-<粒度>/（同じ名前のフォルダだけ消して書き直す）・history に日時スナップショット
 export const DETECT_STANDALONE_HISTORY = '../../outputs/history/BC-LC-detect';
 export const CLIENT_REPOS_BASE = '../../clonedata/clientRepos'; // クライアント repo クローン（<lib>/<owner>/<repo>）
 export const REGISTRY_DEPS_CACHE = '../../clonedata/registry-deps'; // npm registry の依存情報キャッシュ（<name>.json＝版→dependencies）

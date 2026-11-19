@@ -2,10 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import getAllFiles from '../utils/getAllFiles';
 import { getFunction } from '../astRelated/trace/getFunction';
-import { getExportedNames } from '../astRelated/trace/getExportedNames';
+import { getExportsAndImports } from '../astRelated/trace/getExportedNames';
 import type { ApiSymbol, ApiSurface, ExportStyle, PackageExports, SymbolKind } from '../types/LibDiff';
 import { validateAgainstDts } from './dtsValidation';
-import { findPublishedMissing } from './publishedFiles';
+import { findPublishedMissing, findUnpublishedFiles } from './publishedFiles';
 
 const SOURCE_EXT = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'];
 
@@ -73,7 +73,7 @@ async function listSourceFiles(treeDir: string): Promise<string[]> {
  *   (2) getExportedNames: 関数でない export 名（変数・値・object メンバ）を kind='value' で補完
  *   同名は関数側を優先し，非関数名は名前の有無だけを表す最小シンボル
  */
-async function extractExports(filePath: string, treeDir: string): Promise<ApiSymbol[]> {
+async function extractExports(filePath: string, treeDir: string): Promise<{ symbols: ApiSymbol[]; imports: Record<string, string> }> {
   const rel = path.relative(treeDir, filePath);
   const funcs = await getFunction(filePath, 0); // mode 0 = export 関数のみ + async/optionKeys/exportStyle/kind
   const toSymbol = (f: typeof funcs[number]): ApiSymbol => ({
@@ -107,7 +107,8 @@ async function extractExports(filePath: string, treeDir: string): Promise<ApiSym
 
   // 非関数 export 名を補完（getFunction が拾わなかった名前のみ value として追加）
   const known = new Set(symbols.map(s => s.name));
-  for (const e of await getExportedNames(filePath)) {
+  const { names, imports } = await getExportsAndImports(filePath);
+  for (const e of names) {
     if (known.has(e.name)) continue;
     known.add(e.name);
     symbols.push({
@@ -122,7 +123,7 @@ async function extractExports(filePath: string, treeDir: string): Promise<ApiSym
       ...(e.from ? { reexport: e.from } : {}),
     } as ApiSymbol);
   }
-  return symbols;
+  return { symbols, imports };
 }
 
 const RESOLVE_EXT = ['', '.js', '.ts', '.mjs', '.cjs', '.jsx', '.tsx', '/index.js', '/index.ts'];
@@ -165,18 +166,22 @@ function resolveReexports(symbols: ApiSymbol[]): void {
   }
 }
 
+const BUILD_DIR = /^(\.\/)?(dist|build|out|es|esm|cjs|umd)\//;
+
 /**
  * require('lib') で読まれる入口ファイルを surface のファイルから決める
- *   package.json の main / module を解決し、ビルド成果物（dist/ 等・surface の対象外）なら慣例の置き場（index / src/index / lib/index / <name>）を順に探す
+ *   package.json の main / module を解決する。ビルド成果物（dist/ 等・surface の対象外）なら、先頭のビルドのディレクトリを
+ *   src/・lib/・source/・ルートに置き換えたファイル（例 dist/promisify.js → lib/promisify.js）、慣例の置き場（index / src/index / lib/index / <name>）を順に探す
  */
-function findEntryFile(treeDir: string, files: Set<string>): string | undefined {
+export function resolveEntryFile(pkg: any, files: Set<string>): string | undefined {
   const specs: string[] = [];
   let name: string | undefined;
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(treeDir, 'package.json'), 'utf-8'));
-    for (const f of [pkg.main, pkg.module, pkg['jsnext:main']]) if (typeof f === 'string' && f.length > 0) specs.push(f);
-    if (typeof pkg.name === 'string') name = pkg.name.replace(/^@[^/]+\//, '');
-  } catch { /* package.json が読めなければ慣例の置き場だけで探す */ }
+  for (const f of [pkg?.main, pkg?.module, pkg?.['jsnext:main']]) {
+    if (typeof f !== 'string' || f.length === 0) continue;
+    specs.push(f);
+    if (BUILD_DIR.test(f)) for (const dir of ['src/', 'lib/', 'source/', '']) specs.push(f.replace(BUILD_DIR, dir));
+  }
+  if (typeof pkg?.name === 'string') name = pkg.name.replace(/^@[^/]+\//, '');
   specs.push('index', 'src/index', 'lib/index');
   if (name) specs.push(name, `src/${name}`, `lib/${name}`);
   for (const spec of specs) {
@@ -186,20 +191,35 @@ function findEntryFile(treeDir: string, files: Set<string>): string | undefined 
   return undefined;
 }
 
+function findEntryFile(treeDir: string, files: Set<string>): string | undefined {
+  let pkg: any;
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(treeDir, 'package.json'), 'utf-8'));
+  } catch { /* package.json が読めなければ慣例の置き場だけで探す */ }
+  return resolveEntryFile(pkg, files);
+}
+
 /** 指定ツリー（=1バージョン）の export API surface を構築 */
 async function buildApiSurface(treeDir: string, version: string, tag: string): Promise<ApiSurface> {
   const symbols: ApiSymbol[] = [];
+  const importsByFile: Record<string, Record<string, string>> = {};
   const sourceFiles = await listSourceFiles(treeDir);
   for (const f of sourceFiles) {
-    symbols.push(...await extractExports(f, treeDir));
+    const r = await extractExports(f, treeDir);
+    symbols.push(...r.symbols);
+    if (r.symbols.length > 0 && Object.keys(r.imports).length > 0) importsByFile[path.relative(treeDir, f)] = r.imports;
   }
   resolveReexports(symbols);
+  const relSources = sourceFiles.map(f => path.relative(treeDir, f));
+  const entryFile = findEntryFile(treeDir, new Set(relSources));
   return {
     version, tag, scope: 'export', symbols,
     engines: readEngines(treeDir), moduleType: readModuleType(treeDir),
     dtsValidation: validateAgainstDts(treeDir, symbols),
     publishedMissing: findPublishedMissing(treeDir), packageExports: readPackageExports(treeDir),
-    entryFile: findEntryFile(treeDir, new Set(sourceFiles.map(f => path.relative(treeDir, f)))),
+    entryFile,
+    unpublishedFiles: findUnpublishedFiles(treeDir, [...new Set(symbols.map(s => s.filePath))], entryFile),
+    importsByFile,
   };
 }
 

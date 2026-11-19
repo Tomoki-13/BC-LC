@@ -42,6 +42,98 @@ function resolveRelative(fromFile: string, spec: string, tree: Set<string>): str
   return null;
 }
 
+const SOURCE_RESOLVE_EXT = ['', '.js', '.ts', '.mjs', '.cjs', '.jsx', '.tsx', '/index.js', '/index.ts'];
+
+/** .npmignore の1行を正規表現へ。'/' を途中に含むか先頭が '/' なら root 起点、それ以外はどの階層の名前にも当たる */
+function ignoreLineToRegExp(line: string): RegExp {
+  const anchored = line.startsWith('/') || line.replace(/\/$/, '').includes('/');
+  const g = line.replace(/^\//, '').replace(/\/$/, '');
+  const src = g.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*\*\/?/g, '\u0001')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]')
+    .replace(/\u0001/g, '.*');
+  return new RegExp(anchored ? `^${src}(/.*)?$` : `(^|/)${src}(/.*)?$`);
+}
+
+/** .npmignore の内容から「除外されるか」の判定関数を作る（後の行が優先・! で除外を取り消す） */
+function npmignoreMatcher(content: string): (file: string) => boolean {
+  const rules = content.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0 && !l.startsWith('#'))
+    .map(l => (l.startsWith('!') ? { negate: true, re: ignoreLineToRegExp(l.slice(1)) } : { negate: false, re: ignoreLineToRegExp(l) }));
+  return (file: string) => {
+    let ignored = false;
+    for (const r of rules) if (r.re.test(file)) ignored = !r.negate;
+    return ignored;
+  };
+}
+
+/** 相対指定子をソースのファイル（.ts 等を含む）に解決する。無ければ undefined */
+function resolveSource(fromFile: string, spec: string, tree: Set<string>): string | undefined {
+  const base = path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), spec)).replace(/\/$/, '');
+  return SOURCE_RESOLVE_EXT.map(e => base + e).find(c => tree.has(c));
+}
+
+/**
+ * surface のソースファイルのうち npm で配られないものを返す（配られるファイルの定義は docs/mechanics/published-files.md）
+ *   入力: treeFiles＝版ツリーの全ファイル（repo 相対・/ 区切り）/ read＝repo 相対パスの内容を返す関数 / sourceFiles＝surface の対象 / entryFile＝surface の入口
+ *   出力: 配られないソースファイル（package.json が読めなければ undefined）
+ */
+export function computeUnpublishedFiles(
+  treeFiles: string[], read: (rel: string) => string | undefined, sourceFiles: string[], entryFile: string | undefined,
+): string[] | undefined {
+  let pkg: any;
+  try {
+    pkg = JSON.parse(read('package.json') ?? '');
+  } catch {
+    return undefined;
+  }
+  const tree = new Set(treeFiles);
+  const published = new Set<string>();
+  const mainSpec = typeof pkg?.main === 'string' && pkg.main.length > 0 ? pkg.main : 'index.js';
+  const main = resolveRelative('package.json', mainSpec.startsWith('.') ? mainSpec : `./${mainSpec}`, tree);
+
+  if (Array.isArray(pkg?.files)) {
+    const include = pkg.files.filter((f: unknown) => typeof f === 'string' && !f.startsWith('!')).map(entryToRegExp);
+    const exclude = pkg.files.filter((f: unknown) => typeof f === 'string' && f.startsWith('!')).map((f: string) => entryToRegExp(f.slice(1)));
+    for (const f of treeFiles) {
+      if (ALWAYS_SHIPPED.test(f) || f === main || (include.some((r: RegExp) => r.test(f)) && !exclude.some((r: RegExp) => r.test(f)))) published.add(f);
+    }
+  } else {
+    const npmignore = read('.npmignore');
+    const ignored = npmignore !== undefined ? npmignoreMatcher(npmignore) : () => false;
+    for (const f of treeFiles) if (ALWAYS_SHIPPED.test(f) || !ignored(f)) published.add(f);
+  }
+
+  // main が surface のソースでない（dist/ などのビルド結果）ときは、入口とそこから相対 import で届くソースを配られるものとする
+  if (!(main && sourceFiles.includes(main)) && entryFile && tree.has(entryFile)) {
+    const seen = new Set<string>([entryFile]);
+    const queue = [entryFile];
+    while (queue.length > 0) {
+      const file = queue.shift()!;
+      published.add(file);
+      const src = read(file);
+      if (src === undefined) continue;
+      for (const m of src.matchAll(RELATIVE_SPEC)) {
+        const target = resolveSource(file, m[1], tree);
+        if (target && !seen.has(target)) { seen.add(target); queue.push(target); }
+      }
+    }
+  }
+  return sourceFiles.filter(f => !published.has(f));
+}
+
+/** computeUnpublishedFiles をチェックアウト済みの版ツリーで行う */
+export function findUnpublishedFiles(treeDir: string, sourceFiles: string[], entryFile: string | undefined): string[] | undefined {
+  const read = (rel: string) => {
+    try {
+      return fs.readFileSync(path.join(treeDir, rel), 'utf-8');
+    } catch {
+      return undefined;
+    }
+  };
+  return computeUnpublishedFiles(listTree(treeDir), read, sourceFiles, entryFile);
+}
+
 /**
  * 公開物（npm に載るファイル）から欠けたファイルを、main から辿れる相対 require で探す
  *   入力: checkout 済みの版ツリー / 出力: 欠落の一覧（package.json に files 指定が無ければ undefined＝判定対象外）

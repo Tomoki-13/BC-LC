@@ -1,6 +1,7 @@
 import path from 'path';
 import semver from 'semver';
 import type { ApiSurface, ApiSymbol, LossCandidate, ChangeTag, Confidence } from '../types/LibDiff';
+import { sameReturnsModuloRenaming } from './returnEquivalence';
 
 // semver でない range（github:/file:/workspace: 等）で throw させず null を返す
 const safeMinVersion = (range: string) => { try { return semver.minVersion(range); } catch { return null; } };
@@ -87,11 +88,35 @@ function raisedEngineFloor(field: 'node' | 'npm', preRange?: string, postRange?:
   return null;
 }
 
+/** 返り値の式を書いたファイルの読み込み（再公開をたどった記号は定義元のファイル） */
+function importsOf(surface: ApiSurface, sym: ApiSymbol): Record<string, string> {
+  const file = sym.resolvedFrom ? sym.resolvedFrom.split('#')[0] : sym.filePath;
+  return surface.importsByFile?.[file] ?? {};
+}
+
+/** クライアントがその記号に触れる名前（`require(lib).<名前>`）。default は別名のプロパティがあっても default */
+function publicNameOf(sym: ApiSymbol): string {
+  if (sym.name === 'default' || !sym.accessPath) return sym.name;
+  const parts = sym.accessPath.split('.');
+  return parts.length > 1 ? parts.slice(1).join('.') : sym.name;
+}
+
+/** 入口ファイルの記号を、クライアントから触れる名前（publicNameOf）ごとにまとめる。同じ名前が複数あれば値より関数・クラスを使う */
+function entryApis(surface: ApiSurface): Map<string, ApiSymbol> {
+  const out = new Map<string, ApiSymbol>();
+  for (const s of surface.symbols) {
+    if (s.filePath !== surface.entryFile) continue;
+    const key = publicNameOf(s);
+    const prev = out.get(key);
+    if (!prev || (prev.kind === 'value' && s.kind !== 'value')) out.set(key, s);
+  }
+  return out;
+}
+
 /** pre/post の surface を突き合わせ、後方互換性の損失候補を返す */
 function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCandidate[] {
   const out: LossCandidate[] = [];
-  const preByName = indexByName(pre);
-  const postByName = indexByName(post);
+  const unpublished = new Set(pre.unpublishedFiles ?? []);
 
   const make = (
     sym: ApiSymbol, tag: ChangeTag, confidence: Confidence, detail?: string,
@@ -107,99 +132,127 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
     detail,
   });
 
+  const seen = new Set<string>();
+  const once = (key: string, fn: () => void) => { if (!seen.has(key)) { seen.add(key); fn(); } };
+
   // emit するタグと検出箇所:
-  //   per-name（名前×定義ファイル走査）:
-  //     1)  function-removed / export-removed             名前が post に無い
-  //     2a) arg-added / arg-removed / arg-reordered       引数の増減・並び替え
-  //     2b) return-changed  2c) sync-to-async  2d) export-style-changed  2e) option-removed  2f) new-required
+  //   per-name: 1) function-removed / export-removed  2a) arg-added / arg-removed / arg-reordered
+  //             2b) return-changed  2c) sync-to-async  2d) export-style-changed  2e) option-removed  2f) new-required
+  //     入口ファイルが pre/post とも分かる（post の入口から export を1件以上取れた）ときは、入口の公開名ごとに比べる
+  //     分からないときは、配られるファイルの名前×定義ファイルで比べる
   //   package.json（symbol 非依存）: 3a) node-npm-requirement-raised   3b) module-format-changed   3c) published-file-missing
   //                                 3d) exports-restricted   3e) entry-default-removed（入口ファイルの default）
   //   file-level（サブパス）:        4a) deep-import-broken（移動）      4b) module-removed（削除）
 
-  // 1)+2) pre の全 export 名 × 全定義(ファイル)を走査
-  for (const [name, preSyms] of preByName) {
-    const postSyms = postByName.get(name) ?? [];
-    const preFiles = new Set(preSyms.map(s => s.filePath));
-    const postFiles = new Set(postSyms.map(s => s.filePath));
-    // 名前は残るが pre/post でファイルが全く重ならない＝定義の移動（クリーンな relocation）
-    // TODO:コードの類似度を見ても面白そう
-    const relocated = postSyms.length > 0 && ![...preFiles].some(f => postFiles.has(f));
+  // 2) pre の記号 a と post の記号 b の署名を比べる
+  const compareSignatures = (a: ApiSymbol, b: ApiSymbol) => {
+    // 署名が分からない値（kind=value）が片方にあるときは比べない
+    //   例: default が関数 → `module.exports = require('./lib/x')`（値）になると、引数 [] と比べて arg-removed に見える
+    if (a.kind === 'value' || b.kind === 'value') return;
+    const k = `${a.name}:${a.filePath}`;
 
-    const seen = new Set<string>();
-    const once = (key: string, fn: () => void) => { if (!seen.has(key)) { seen.add(key); fn(); } };
+    // 2a) arg-added / arg-removed / arg-reordered: 引数の増減・並び替え
+    const paramTag = diffParams(a.params ?? [], b.params ?? []);
+    if (paramTag) {
+      const preParams = a.params ?? [], postParams = b.params ?? [];
+      // 末尾のみ削除（post が pre の接頭辞）＝ 余剰引数。c を渡す者だけ検出するが JS は余剰引数を無視し無害な場合あり → semantic
+      // 中間削除/並び替え/追加は位置がずれ確実に破壊 → structural
+      const trailingRemoval = paramTag === 'arg-removed' && postParams.every((p, i) => p === preParams[i]);
+      const conf: Confidence = trailingRemoval ? 'semantic' : 'structural';
+      once(`${k}:${paramTag}`, () => out.push(make(b, paramTag, conf,
+        `(${preParams.join(', ')}) → (${postParams.join(', ')})`)));
+    }
 
-    // 定義=ファイル単位で対応付け（同名が複数ファイルにあっても全て評価）
-    for (const a of preSyms) {
-      let b = postSyms.find(s => s.filePath === a.filePath);
-      // 削除タグは種別で出し分け（関数=function-removed / 非関数 export=export-removed）
+    // 2b) return-changed: 返り値（整形だけの差＝関数↔アロー等の一部ノイズは空白正規化で無視）
+    //   識別子の名前の付け替えだけの差（`bytesToUuid(b)` → `stringify(b)`）も出さない
+    const ra = normReturns(a.returnExprs);
+    const rb = normReturns(b.returnExprs);
+    if (ra !== rb && (ra || rb)
+      && !sameReturnsModuloRenaming(a.returnExprs ?? [], b.returnExprs ?? [], importsOf(pre, a), importsOf(post, b))) {
+      once(`${k}:return-changed`, () => out.push(make(b, 'return-changed', 'semantic',
+        `return: [${ra}] → [${rb}]`)));
+    }
+
+    // 2c) sync-to-async: 同期/非同期の変化（await 要否が変わる＝呼び出し側に影響）
+    if ((a.isAsync ?? false) !== (b.isAsync ?? false)) {
+      once(`${k}:sync-to-async`, () => out.push(make(b, 'sync-to-async', 'structural',
+        `${a.isAsync ? 'async' : 'sync'} → ${b.isAsync ? 'async' : 'sync'}`)));
+    }
+
+    // 2d) export-style-changed: クライアントから見た公開名の変化（accessPath のプロパティ名。例 typeofrequest.is → typeis）
+    //   accessPath の先頭はライブラリ内の変数名なので比べない（uuid 3.0.0 の uuid.v1 と 3.0.1 の exports の v1 は同じ require('uuid').v1）
+    if (publicNameOf(a) !== publicNameOf(b)) {
+      once(`${k}:export-style-changed`, () => out.push(make(b, 'export-style-changed', 'semantic',
+        `${a.accessPath || '(直接)'} → ${b.accessPath || '(直接)'}`)));
+    }
+
+    // 2e) option-removed: options オブジェクトの受理キー変化（分割代入 or opts.key 読み取りベース）
+    const preKeys = new Set(a.optionKeys ?? []);
+    const postKeys = new Set(b.optionKeys ?? []);
+    if (preKeys.size > 0) {
+      // 追加(option-added)は加算的で非破壊のため損失候補にしない。削除のみ BC 損失として出す
+      const removed = [...preKeys].filter(key => !postKeys.has(key));
+      if (removed.length > 0) {
+        once(`${k}:option-removed`, () => out.push(make(b, 'option-removed', 'semantic',
+          `削除キー: ${removed.join(', ')}`)));
+      }
+    }
+
+    // 2f) new-required: 関数↔class の変化（class は new 必須・関数は new 任意 → 呼び出し側の new 要否が変わる）
+    if ((a.kind === 'class') !== (b.kind === 'class')) {
+      once(`${k}:new-required`, () => out.push(make(b, 'new-required', 'structural',
+        `${a.kind} → ${b.kind}`)));
+    }
+  };
+
+  const byEntry = !!pre.entryFile && !!post.entryFile && post.symbols.some(s => s.filePath === post.entryFile);
+  if (byEntry) {
+    // 1)+2) 入口の公開名（require(lib).<名前>・default）ごとに比べる。入口でないファイルは 4) のファイル単位だけで見る
+    //   default が入口から消えたときは 3e) entry-default-removed で出す
+    const postApis = entryApis(post);
+    for (const [key, a] of entryApis(pre)) {
+      const b = postApis.get(key);
+      if (b) {
+        compareSignatures(a, b);
+        continue;
+      }
+      if (key === 'default') continue;
       const removedTag: ChangeTag = a.kind === 'value' ? 'export-removed' : 'function-removed';
+      once(`${a.name}:${a.filePath}:${removedTag}`, () => out.push(make(a, removedTag, 'structural')));
+    }
+  } else {
+    // 1)+2) 配られるファイルの export 名 × 全定義(ファイル)を走査
+    const preByName = indexByName(pre);
+    const postByName = indexByName(post);
+    for (const [name, preSymsAll] of preByName) {
+      const preSyms = preSymsAll.filter(s => !unpublished.has(s.filePath));
+      if (preSyms.length === 0) continue;
+      const postSyms = postByName.get(name) ?? [];
+      const preFiles = new Set(preSyms.map(s => s.filePath));
+      const postFiles = new Set(postSyms.map(s => s.filePath));
+      // 名前は残るが pre/post でファイルが全く重ならない＝定義の移動（クリーンな relocation）
+      // TODO:コードの類似度を見ても面白そう
+      const relocated = postSyms.length > 0 && ![...preFiles].some(f => postFiles.has(f));
 
-      // 1) function-removed / export-removed: 対応する post 定義（同ファイル）が無い
-      if (!b) {
-        // 名前ごと消滅 → function/export-removed（symbol 使用の検出用）
-        if (postSyms.length === 0) {
-          once(`${a.filePath}:${removedTag}`, () => out.push(make(a, removedTag, 'structural')));
-          continue;
+      // 定義=ファイル単位で対応付け（同名が複数ファイルにあっても全て評価）
+      for (const a of preSyms) {
+        let b = postSyms.find(s => s.filePath === a.filePath);
+        // 削除タグは種別で出し分け（関数=function-removed / 非関数 export=export-removed）
+        const removedTag: ChangeTag = a.kind === 'value' ? 'export-removed' : 'function-removed';
+
+        // 1) function-removed / export-removed: 対応する post 定義（同ファイル）が無い
+        if (!b) {
+          // 名前ごと消滅 → function/export-removed（symbol 使用の検出用）
+          if (postSyms.length === 0) {
+            once(`${name}:${a.filePath}:${removedTag}`, () => out.push(make(a, removedTag, 'structural')));
+            continue;
+          }
+          // 全ファイル移動（クリーンな relocation）のみ、移動先を対応先にして署名比較を継続。
+          // 一部ファイルだけ消え名前が別ファイルに残る場合は無関係な定義比較を避けるためスキップ（サブパス破壊は file-level）
+          if (!relocated) continue;
+          b = postSyms[0];
         }
-        // 全ファイル移動（クリーンな relocation）のみ、移動先を対応先にして署名比較を継続。
-        // 一部ファイルだけ消え名前が別ファイルに残る場合は無関係な定義比較を避けるためスキップ（サブパス破壊は file-level）
-        if (!relocated) continue;
-        b = postSyms[0];
-      }
-
-      // 署名が分からない値（kind=value）が片方にあるときは比べない
-      //   例: default が関数 → `module.exports = require('./lib/x')`（値）になると、引数 [] と比べて arg-removed に見える
-      if (a.kind === 'value' || b.kind === 'value') continue;
-
-      // 2) 挙動変化を検出（arg と return は排他にしない＝取りこぼし防止）
-      // 2a) arg-added / arg-removed / arg-reordered: 引数の増減・並び替え
-      const paramTag = diffParams(a.params ?? [], b.params ?? []);
-      if (paramTag) {
-        const pre = a.params ?? [], post = b.params ?? [];
-        // 末尾のみ削除（post が pre の接頭辞）＝ 余剰引数。c を渡す者だけ検出するが JS は余剰引数を無視し無害な場合あり → semantic
-        // 中間削除/並び替え/追加は位置がずれ確実に破壊 → structural
-        const trailingRemoval = paramTag === 'arg-removed' && post.every((p, i) => p === pre[i]);
-        const conf: Confidence = trailingRemoval ? 'semantic' : 'structural';
-        once(`${a.filePath}:${paramTag}`, () => out.push(make(b, paramTag, conf,
-          `(${pre.join(', ')}) → (${post.join(', ')})`)));
-      }
-
-      // 2b) return-changed: 返り値（整形だけの差＝関数↔アロー等の一部ノイズは空白正規化で無視）
-      const ra = normReturns(a.returnExprs);
-      const rb = normReturns(b.returnExprs);
-      if (ra !== rb && (ra || rb)) {
-        once(`${a.filePath}:return-changed`, () => out.push(make(b, 'return-changed', 'semantic',
-          `return: [${ra}] → [${rb}]`)));
-      }
-
-      // 2c) sync-to-async: 同期/非同期の変化（await 要否が変わる＝呼び出し側に影響）
-      if ((a.isAsync ?? false) !== (b.isAsync ?? false)) {
-        once(`${a.filePath}:sync-to-async`, () => out.push(make(b, 'sync-to-async', 'structural',
-          `${a.isAsync ? 'async' : 'sync'} → ${b.isAsync ? 'async' : 'sync'}`)));
-      }
-
-      // 2d) export-style-changed: 呼び出し形（プロパティ公開パス accessPath）の変化。例: uuid.v4 → 直接
-      if ((a.accessPath ?? '') !== (b.accessPath ?? '')) {
-        once(`${a.filePath}:export-style-changed`, () => out.push(make(b, 'export-style-changed', 'semantic',
-          `${a.accessPath || '(直接)'} → ${b.accessPath || '(直接)'}`)));
-      }
-
-      // 2e) option-removed: options オブジェクトの受理キー変化（分割代入 or opts.key 読み取りベース）
-      const preKeys = new Set(a.optionKeys ?? []);
-      const postKeys = new Set(b.optionKeys ?? []);
-      if (preKeys.size > 0) {
-        // 追加(option-added)は加算的で非破壊のため損失候補にしない。削除のみ BC 損失として出す
-        const removed = [...preKeys].filter(k => !postKeys.has(k));
-        if (removed.length > 0) {
-          once(`${a.filePath}:option-removed`, () => out.push(make(b, 'option-removed', 'semantic',
-            `削除キー: ${removed.join(', ')}`)));
-        }
-      }
-
-      // 2f) new-required: 関数↔class の変化（class は new 必須・関数は new 任意 → 呼び出し側の new 要否が変わる）
-      if ((a.kind === 'class') !== (b.kind === 'class')) {
-        once(`${a.filePath}:new-required`, () => out.push(make(b, 'new-required', 'structural',
-          `${a.kind} → ${b.kind}`)));
+        compareSignatures(a, b);
       }
     }
   }
@@ -297,6 +350,7 @@ function diffSurface(pre: ApiSurface, post: ApiSurface, libName: string): LossCa
   }
   for (const [file, syms] of preByFile) {
     if (postFiles.has(file)) continue;                       // ファイルは残っている
+    if (unpublished.has(file)) continue;                     // npm で配られないファイルは読み込めない
     const moved = syms.some(s => postNames.has(s.name));     // 名前が post に生存＝移動
     // ディレクトリごと消えた（post に同じディレクトリ配下の export ファイルが無い）なら、その配下への deep import はすべて壊れる
     const dir = path.posix.dirname(file);

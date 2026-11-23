@@ -15,9 +15,10 @@ import { runScopeCompare } from './evaluation/scopeCompare';// 比較: 外部API
 import { runReturnAnalysis } from './analysis/returnAnalysis'; // 分析: return-changed 内訳
 import { runCapturedSymbols } from './analysis/capturedSymbols'; // 分析: 損失 API 一覧（DIAGNOSE 表記）
 import { runClientDetect } from './clientDetect/runClientDetect'; // 検出: クライアント照合
+import { runRunSummary } from './evaluation/runSummary';         // まとめ: 実行全体の一番大事な数値
 import { fetchVersionList, fetchVersionMeta, extractRepositoryUrl } from './utils/npmRegistry';
 import { initRunLog, phase, logEvent } from './utils/runLog';
-import { RUN_OUTPUT_BASE } from './utils/evalShared';
+import { RUN_OUTPUT_BASE, RUN_LATEST_BASE, RUN_HISTORY_BASE, LATEST_BCLC_BASE, LOSS_JUDGEMENT_DIR, KEY_RESULTS_JSON } from './utils/evalShared';
 import { RUN_SCOPE, RUN_DETECT_LEVEL, RUN_VARIANT, DETECT_LEVEL_NAME } from './utils/runVariant';
 import type { ApiSurface, LossCandidate } from './types/LibDiff';
 
@@ -30,8 +31,8 @@ const PATHS = {
   libCloneBase: '../../clonedata/lib_versions',                       // <lib>/（全版入りの単一クローン・使い捨て）
   historyBase: `../../outputs/history/BC-LC/libDiff/${RUN_ID}`,       // <lib>/{surfaces,pairs}/
   latestBase: '../../outputs/latest/BC-LC/libDiff',                   // <lib>/{surfaces,pairs}/
-  evalLatestBase: RUN_OUTPUT_BASE,                                    // eval パイプラインの最新出力（モードごと: latest/BC-LC/<scope-…_detect-…>/）
-  evalHistoryBase: `../../outputs/history/BC-LC/${RUN_ID}_${RUN_VARIANT}`, // 実行ごとの結果アーカイブ（latest のモードのフォルダを丸ごと鏡写し。logs/ は make が同じ場所に書く）
+  evalLatestBase: RUN_LATEST_BASE,                                    // eval パイプラインの最新出力（モードごと: latest/BC-LC/<scope-…_detect-…>/）
+  evalHistoryBase: `../../outputs/history/BC-LC/${RUN_ID}_${RUN_VARIANT}`, // 実行ごとの結果（logs/ は make が同じ場所に書く）
 };
 
 const cleanVersion = (v: string): string => v.replace(/[^a-zA-Z0-9]/g, '');
@@ -63,23 +64,36 @@ function writeSummary(safeName: string, libraryName: string, losses: LossCandida
 }
 
 /**
- * eval パイプラインの latest 出力（モードのフォルダ）を history/BC-LC/<RUN_ID>_<モード>/ に丸ごと退避する（履歴は消さず積む）
- * 実行日時とモードは ディレクトリ名 と run_info.json の両方に記録し、どの結果がいつ・どのモードのものか一意に分かるようにする
+ * フルパイプラインの最後に、結果を history と latest の両方に置く
+ *   make run（BCLC_WRITE_TO=history）: 実行中は history/BC-LC/<RUN_ID>_<モード>/ に書いている。latest/BC-LC/ を空にしてから、logs/ を除いて latest/BC-LC/<モード>/ に写す
+ *   make を通さない直接の実行: latest/BC-LC/<モード>/ に書いている。history に写し、latest/BC-LC/ のほかのフォルダを消す
+ *   run_info.json（実行の ID・モード・混同行列）は history 側に書く
  */
-function archiveEvalToHistory(): void {
+function publishToLatest(): void {
+  const latestRoot = path.resolve(process.cwd(), LATEST_BCLC_BASE);
   const latest = path.resolve(process.cwd(), PATHS.evalLatestBase);
   const history = path.resolve(process.cwd(), PATHS.evalHistoryBase);
-  fs.mkdirSync(history, { recursive: true });
-  fs.cpSync(latest, history, { recursive: true });
+  const wroteToHistory = path.resolve(process.cwd(), RUN_OUTPUT_BASE) === path.resolve(process.cwd(), RUN_HISTORY_BASE);
+  if (wroteToHistory) {
+    fs.rmSync(latestRoot, { recursive: true, force: true });
+    fs.mkdirSync(latest, { recursive: true });
+    fs.cpSync(history, latest, { recursive: true, filter: src => path.relative(history, src).split(path.sep)[0] !== 'logs' });
+  } else {
+    fs.mkdirSync(history, { recursive: true });
+    fs.cpSync(latest, history, { recursive: true });
+    for (const name of fs.existsSync(latestRoot) ? fs.readdirSync(latestRoot) : []) {
+      if (path.join(latestRoot, name) !== latest) fs.rmSync(path.join(latestRoot, name), { recursive: true, force: true });
+    }
+  }
   // 混同行列を run_info に同梱して、日時と結果の対応を1ファイルで追える
   let confusion: unknown = null;
   try {
-    confusion = JSON.parse(fs.readFileSync(path.join(latest, 'results', 'loss-judgement', 'compare_summary.json'), 'utf-8')).confusion;
+    confusion = JSON.parse(fs.readFileSync(path.join(history, path.relative(RUN_OUTPUT_BASE, LOSS_JUDGEMENT_DIR), KEY_RESULTS_JSON), 'utf-8')).confusion;
   } catch { /* 無ければ null */ }
   fs.writeFileSync(path.join(history, 'run_info.json'), JSON.stringify(
     { runId: RUN_ID, scope: RUN_SCOPE, detect: DETECT_LEVEL_NAME[RUN_DETECT_LEVEL], variant: RUN_VARIANT,
       archivedAt: new Date().toISOString(), confusion }, null, 2));
-  console.log(`[Archive] eval 結果を保存 → ${history}`);
+  console.log(`[Publish] history → ${history}・latest → ${latest}（latest/BC-LC/ のほかのフォルダは消した）`);
 }
 
 /** history/<RUN_ID>/<lib> を latest/<lib> にコピー（lib 単位で latest を更新・蓄積） */
@@ -287,23 +301,27 @@ async function main(): Promise<void> {
   } else {
     // 引数なし = フルパイプライン。各ディレクトリのトップ関数を順に呼ぶ（正解→判定+生成→評価→分析→検出）
     //   段階ごとの所要時間と、落ちた段階を実行ログ（run_info.json / progress.json）で追えるようにする
-    // 同じモードの前回の latest を消してから作る（前の実行の残骸を history に持ち込まない）
-    fs.rmSync(path.resolve(process.cwd(), PATHS.evalLatestBase), { recursive: true, force: true });
+    // 書き込み先（make run では history/BC-LC/<RUN_ID>_<モード>/）を空から作る。latest は最後の publishToLatest まで前回の結果のまま
+    if (path.resolve(process.cwd(), RUN_OUTPUT_BASE) === path.resolve(process.cwd(), RUN_LATEST_BASE)) {
+      fs.rmSync(path.resolve(process.cwd(), RUN_LATEST_BASE), { recursive: true, force: true });
+    }
     console.log(`[run] モード ${RUN_VARIANT}（API の範囲 ${RUN_SCOPE}・検出の粒度 ${RUN_DETECT_LEVEL} ${DETECT_LEVEL_NAME[RUN_DETECT_LEVEL]}）`);
     phase('ground-truth');
-    runGroundTruth();          // 正解ラベル → work/ground-truth/ground_truth.json
-    await runDetection();      // 判定+生成（全ペア1パス・API の範囲で絞る）→ work/library-detect/records.json + work/patterns/patterns.json（段階名は runDetection 内で設定）
+    runGroundTruth();          // 正解ラベル → intermediate_data/ground_truth/ground_truth.json
+    await runDetection();      // 判定+生成（全ペア1パス・API の範囲で絞る）→ intermediate_data/loss_candidates/ + generated_patterns/（段階名は runDetection 内で設定）
     phase('compare');
-    runCompare();              // 評価（採点）→ results/loss-judgement/・discussion/loss-judgement/
+    runCompare();              // 評価（採点）→ loss_judgement_accuracy/・loss_judgement_by_tag/
     phase('return-analysis');
-    runReturnAnalysis();       // 分析 → discussion/analysis/returnAnalysis/
+    runReturnAnalysis();       // 分析 → return_changed_analysis/
     phase('captured-symbols');
-    runCapturedSymbols();      // 分析 → discussion/analysis/capturedSymbols/（損失 API 一覧）
+    runCapturedSymbols();      // 分析 → loss_functions_list/（損失 API 一覧）
     phase('scope-compare');
-    await runScopeCompare();   // 比較 → discussion/scope-compare/scope_compare.json
-    await runClientDetect({ mode: 'batch' }); // 検出 → results/client-detection/・discussion/client-detection/・changever/（段階名は runClientDetect 内で設定・前提が無ければ warn して skip）
-    phase('archive');
-    archiveEvalToHistory();    // ★latest を history/BC-LC/<RUN_ID> に退避（patterns と client-detect を同じ RUN_ID に）
+    await runScopeCompare();   // 比較 → loss_judgement_by_api_scope/
+    await runClientDetect({ mode: 'batch' }); // 検出 → detected_clients/・changeversion_input/（段階名は runClientDetect 内で設定・前提が無ければ warn して skip）
+    phase('run-summary');
+    runRunSummary();           // まとめ → run_summary/（key_results.json・detail_per_version_pair.csv）
+    phase('publish');
+    publishToLatest();         // history/BC-LC/<RUN_ID>_<モード>/ と latest/BC-LC/<モード>/ に同じ結果を置く（latest/BC-LC/ は今回の結果だけ）
     return;
   }
 

@@ -5,7 +5,7 @@ import { escapeFunc, bindingVarKey } from './patternToScript';
 /** client 1件（useAst 抽出）に対する照合結果 */
 export interface ClientMatch {
   matched: boolean;
-  hits: { pattern: GeneratedPattern; file: string }[]; // 命中パターンと命中ファイル
+  hits: { pattern: GeneratedPattern; file: string; line: number }[]; // 命中パターンと命中ファイル・命中した使い方の行（binding だけのパターンは binding の行）
 }
 
 interface FlatBlock { code: string; types: string[][]; context: string[][] }
@@ -78,11 +78,11 @@ function typesCompatible(expectedTypes: string[][], userTypes: string[][], mode:
   return true;
 }
 
-/** 1パターンが client(抽出済み groups) に命中するか。命中ファイルを返す（無ければ null）
+/** 1パターンが client(抽出済み groups) に命中するか。命中ファイルと行を返す（無ければ null）
  * binding→usage の2段照合。calls[0]=binding で実変数名を捕捉し、calls[1..]=usage に差し込んで照合する
  * （パターンは変数1つ variable1 か、変数なし＝binding のみ）
  * 妥当性は usageValid（個数/キー・型なしパターン向け）＋ typesCompatible（型ありパターン向け・将来用）の両方 */
-function matchOne(pattern: GeneratedPattern, usageByFile: ExtractFunctionCallsResult[][], mode: number): string | null {
+function matchOne(pattern: GeneratedPattern, usageByFile: ExtractFunctionCallsResult[][], mode: number): { file: string; line: number } | null {
   const binding = pattern.calls[0];
   if (!binding) return null;
   const usages = pattern.calls.slice(1);
@@ -109,9 +109,10 @@ function matchOne(pattern: GeneratedPattern, usageByFile: ExtractFunctionCallsRe
       const actualVar = key ? m.groups?.[key] : undefined;
       if (key && !actualVar) continue; // 変数捕捉が要るのに取れなければ次の binding 候補へ
 
-      if (usages.length === 0) return fileUsage[i].filePath ?? '(matched)'; // binding のみ＝import 成立で命中
+      if (usages.length === 0) return { file: fileUsage[i].filePath ?? '(matched)', line: fileUsage[i].line ?? 0 }; // binding のみ＝import 成立で命中
 
       let allMatched = true;
+      let usageLine = fileUsage[i].line ?? 0;
       for (const usage of usages) {
         const uCode = key && actualVar ? usage.FunctionCallCode.split(key).join(actualVar) : usage.FunctionCallCode;
         let usageRe: RegExp;
@@ -129,6 +130,7 @@ function matchOne(pattern: GeneratedPattern, usageByFile: ExtractFunctionCallsRe
             && usageValid(pattern, blocks[j])
             && typesCompatible(expectedTypes, blocks[j].types, mode)) {
             matched = true;
+            usageLine = fileUsage[j].line ?? usageLine;
             break;
           }
         }
@@ -137,7 +139,7 @@ function matchOne(pattern: GeneratedPattern, usageByFile: ExtractFunctionCallsRe
           break;
         }
       }
-      if (allMatched) return fileUsage[i].filePath ?? '(matched)';
+      if (allMatched) return { file: fileUsage[i].filePath ?? '(matched)', line: usageLine };
     }
   }
   return null;
@@ -152,10 +154,10 @@ export function typeAwarePatternMatch(
   usageByFile: ExtractFunctionCallsResult[][],
   mode: number = 2,
 ): ClientMatch {
-  const hits: { pattern: GeneratedPattern; file: string }[] = [];
+  const hits: { pattern: GeneratedPattern; file: string; line: number }[] = [];
   for (const p of patterns) {
-    const file = matchOne(p, usageByFile, mode);
-    if (file !== null) hits.push({ pattern: p, file });
+    const hit = matchOne(p, usageByFile, mode);
+    if (hit !== null) hits.push({ pattern: p, ...hit });
   }
   return { matched: hits.length > 0, hits };
 }

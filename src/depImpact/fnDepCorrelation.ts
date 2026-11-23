@@ -15,9 +15,7 @@ const hasMajorBump = (r: DetectionRecord) => (r.depChanges ?? []).some(d => d.ch
 const rate = (num: number, den: number) => (den > 0 ? +(num / den).toFixed(3) : 0);
 
 /**
- * 「間接依存起因の見落とし」の識別力を測る
- *   category(TP/FP/FN/TN)別に depChange 有り率・major-bump 有り率を集計し，
- *   FN(見逃し) と TN(正しく損失なし) を比較する（FN≫TN のとき依存 bump は有効な signal）
+ * category(TP/FP/FN/TN)ごとに，依存の範囲が変わった割合と major が上がった割合を数える
  *   出力: BC-sample/depImpact/fn_dep_correlation.json
  */
 function runFnDepCorrelation(): void {

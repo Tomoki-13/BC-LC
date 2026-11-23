@@ -56,6 +56,7 @@ interface GroupAgg {
   structuralDetected: number;   // structural パターンだけで検出した数
   nodeEngineDetected: number;   // 環境述語（node-engine）で検出した数
   dependencyDetected: number;   // 直接の import が無く、依存の経路（package.json・ロックファイル・registry）だけで検出した数
+  detectedWithoutDependencyTag: number; // 依存パッケージ由来のパターン（dependency-breaking-change）を除いても検出した数
   scannedInPairsWithPatterns: number;  // パターンを作れた版ペアにいる走査済みクライアント数（照合の対象にできる数）
   zone: Record<'shared' | 'bclcOnly', { scanned: number; detected: number }>;
   test: { standard: number; notest: number; noscript: number; noPackagejson: number; valid: number };
@@ -63,7 +64,7 @@ interface GroupAgg {
 }
 
 const newGroupAgg = (): GroupAgg => ({
-  pairs: 0, scanned: 0, detected: 0, structuralDetected: 0, nodeEngineDetected: 0, dependencyDetected: 0, scannedInPairsWithPatterns: 0,
+  pairs: 0, scanned: 0, detected: 0, structuralDetected: 0, nodeEngineDetected: 0, dependencyDetected: 0, detectedWithoutDependencyTag: 0, scannedInPairsWithPatterns: 0,
   zone: { shared: { scanned: 0, detected: 0 }, bclcOnly: { scanned: 0, detected: 0 } },
   test: { standard: 0, notest: 0, noscript: 0, noPackagejson: 0, valid: 0 },
   byLib: new Map(),
@@ -238,7 +239,7 @@ async function detectBucket(
   const matchedPerClient: GeneratedPattern[][] = [];
   let scanned = 0;
   // 走査できた（クローン済み）クライアントのみ採点対象　未クローンは母数から除外
-  const perClientMatched: { client: string; matched: boolean; envMatched: boolean; depMatched: boolean }[] = [];
+  const perClientMatched: { client: string; matched: boolean; envMatched: boolean; depMatched: boolean; matchedWithoutDependencyTag: boolean }[] = [];
   // 検出したクライアント × 該当パターンの明細＋test 種別（手確認・検出集合の突合用）
   const detailed: { client: string; test: string; patterns: { tag: string; symbol: string; confidence: string }[] }[] = [];
   const clientDetails: ClientDetail[] = [];
@@ -265,7 +266,7 @@ async function detectBucket(
     if (patterns.length === 0 && !inspectWithoutPatterns) {
       if (!hasRepoContent(c.repoDir)) continue;
       scanned++;
-      perClientMatched.push({ client: c.client, matched: false, envMatched: false, depMatched: false });
+      perClientMatched.push({ client: c.client, matched: false, envMatched: false, depMatched: false, matchedWithoutDependencyTag: false });
       if (supplement) {
         clientDetails.push({ client: c.client, detected: false, detectedBy: [], hitTags: [], whyNotDetected: 'no_patterns_for_pair',
           libraryLink: 'not_checked', linkDetail: '', testScript: classifyTestScript(c.repoDir) });
@@ -286,7 +287,9 @@ async function detectBucket(
     const via = depChecked ? await dependencyPath(c.repoDir, libName) : null;
     const depMatched = via !== null && patterns.length > 0 && !codeRes.matched && !envMatched && dependencyCounts(via, level);
     const matched = codeRes.matched || envMatched || depMatched;
-    perClientMatched.push({ client: c.client, matched, envMatched, depMatched });
+    // 依存パッケージ由来のパターン（dependency-breaking-change）を除いても検出するか
+    const matchedWithoutDependencyTag = codeRes.hits.some(h => h.pattern.tag !== 'dependency-breaking-change') || envMatched || depMatched;
+    perClientMatched.push({ client: c.client, matched, envMatched, depMatched, matchedWithoutDependencyTag });
     const testStatus = matched || supplement ? classifyTestScript(c.repoDir) : '';
     if (matched) {
       detectedClients.push(c.client);
@@ -603,6 +606,8 @@ function groupSummary(label: GroupLabel, a: GroupAgg): Record<string, unknown> {
     structuralOnly: { detected: a.structuralDetected, [key]: rate(a.structuralDetected, a.scanned) },
     nodeEngineOnly: { detected: a.nodeEngineDetected },
     dependencyOnly: { detected: a.dependencyDetected }, // 直接の import が無く依存の経路だけで検出
+    // 依存パッケージ由来のパターン（dependency-breaking-change）を除いたときの検出（以前の実行と比べられる値）
+    withoutDependencyBreakingChange: { detected: a.detectedWithoutDependencyTag, [key]: rate(a.detectedWithoutDependencyTag, a.scanned) },
     // パターンを作れた版ペアにいる走査済みクライアントの数と、走査数に対する割合（照合の対象にできる範囲。検出率ではない）
     clientsInPairsWithPatterns: { scanned: a.scannedInPairsWithPatterns, shareOfScanned: rate(a.scannedInPairsWithPatterns, a.scanned) },
     // パターンを作れた版ペアだけに絞った検出（照合側の性能）。全体の値 = clientsInPairsWithPatterns.shareOfScanned × これ
@@ -716,6 +721,7 @@ async function detectAll(
       agg.structuralDetected += resS.detect.totalClients;
       agg.nodeEngineDetected += res.perClientMatched.filter(c => c.envMatched).length;
       agg.dependencyDetected += res.perClientMatched.filter(c => c.depMatched).length;
+      agg.detectedWithoutDependencyTag += res.perClientMatched.filter(c => c.matchedWithoutDependencyTag).length;
       if (hasPatterns) agg.scannedInPairsWithPatterns += res.detect.scannedDirCount;
       for (const c of res.perClientMatched) {
         const z = agg.zone[zoneOf(rec.npm_pkg, c.client)];

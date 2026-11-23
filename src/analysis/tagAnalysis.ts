@@ -18,7 +18,7 @@ const formatTally = (tally: Tally) => Object.entries(tally)
   .map(([key, v]) => ({ key, fail: v.fail, succ: v.succ, total: v.fail + v.succ, failRate: +(v.fail / (v.fail + v.succ)).toFixed(3) }))
   .sort((a, b) => b.succ - a.succ);
 
-/** 検出タグ別に fail/succ を集計し、FP のノイズ源を特定する（loss_candidates_per_version_pair.json 由来 → tag_analysis.json） */
+/** 検出タグ別に fail/succ を集計する（loss_candidates_per_version_pair.json 由来 → tag_analysis.json） */
 function runTagAnalysis(): void {
   const records = loadRecords().filter(r => r.status === 'evaluated');
 

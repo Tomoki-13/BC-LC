@@ -7,7 +7,7 @@ import { sameReturnsModuloRenaming } from './returnEquivalence';
 const safeMinVersion = (range: string) => { try { return semver.minVersion(range); } catch { return null; } };
 
 /** どんな後方互換性の損失かを表すラベル（結果を見て損失内容が分かるように） */
-function labelOf(tag: ChangeTag): string {
+export function labelOf(tag: ChangeTag): string {
   switch (tag) {
     case 'function-removed':            return 'export 関数の削除（呼び出し不可）';
     case 'export-removed':              return '非関数 export（変数/値/メンバ）の削除（参照不可）';
@@ -28,6 +28,7 @@ function labelOf(tag: ChangeTag): string {
     case 'published-file-missing':      return '公開物からのファイル欠落（読み込み時に Cannot find module）';
     case 'exports-restricted':          return 'package.json exports による公開範囲の縮小（サブパス・require が読めなくなる）';
     case 'entry-default-removed':       return '入口ファイルの default の削除（require(lib)() / import x from lib が壊れる）';
+    case 'dependency-breaking-change':  return '依存パッケージの破壊的変更を呼ぶ公開関数（依存パッケージの更新で挙動・呼び出しが壊れる）';
     case 'dependency-changed':          return '依存の変更';
     default:                            return String(tag);
   }
@@ -95,14 +96,14 @@ function importsOf(surface: ApiSurface, sym: ApiSymbol): Record<string, string> 
 }
 
 /** クライアントがその記号に触れる名前（`require(lib).<名前>`）。default は別名のプロパティがあっても default */
-function publicNameOf(sym: ApiSymbol): string {
+export function publicNameOf(sym: ApiSymbol): string {
   if (sym.name === 'default' || !sym.accessPath) return sym.name;
   const parts = sym.accessPath.split('.');
   return parts.length > 1 ? parts.slice(1).join('.') : sym.name;
 }
 
 /** 入口ファイルの記号を、クライアントから触れる名前（publicNameOf）ごとにまとめる。同じ名前が複数あれば値より関数・クラスを使う */
-function entryApis(surface: ApiSurface): Map<string, ApiSymbol> {
+export function entryApis(surface: ApiSurface): Map<string, ApiSymbol> {
   const out = new Map<string, ApiSymbol>();
   for (const s of surface.symbols) {
     if (s.filePath !== surface.entryFile) continue;

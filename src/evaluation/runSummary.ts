@@ -79,6 +79,8 @@ function groupResult(g: any) {
     rate,
     clientsScannedOnlyInPairsWithPatterns: onlyPatterns.scanned ?? null,
     rateOnlyInPairsWithPatterns: onlyPatterns.recall ?? onlyPatterns.detectionRate ?? null,
+    clientsDetectedWithoutDependencyBreakingChange: g.withoutDependencyBreakingChange?.detected ?? null,
+    rateWithoutDependencyBreakingChange: g.withoutDependencyBreakingChange?.recall ?? g.withoutDependencyBreakingChange?.detectionRate ?? null,
   };
 }
 
@@ -98,6 +100,7 @@ export function runRunSummary(): void {
       groundTruth: loss.groundTruth,
       confusion: loss.confusion,
       metrics: loss.metrics,
+      withDependency: loss.withDependency ?? null,
     } : null,
     clientDetection: detect ? {
       ...groups,
@@ -117,22 +120,27 @@ export function runRunSummary(): void {
 
   const groupCounts = readGroupCounts();
   const header = ['library', 'prev_version', 'updated_version', 'test_result', 'analysis_status', 'predicted_loss', 'category',
-    'loss_tags', 'loss_candidates', 'patterns',
+    'loss_tags', 'loss_candidates', 'dependency_candidates', 'category_with_dependency', 'patterns',
     'g1_clients_scanned', 'g1_clients_detected', 'g2_clients_scanned', 'g2_clients_detected', 'g3_clients_scanned', 'g3_clients_detected'];
   let records: ReturnType<typeof loadRecords> = [];
   try {
     records = loadRecords();
   } catch { /* 損失候補が無ければバージョンペアの行は書かない */ }
+  // 依存パッケージを調べた実行なら，範囲が変わった依存パッケージが無いバージョンペアも「問題なし」として区分を入れる
+  const dependencyAnalyzed = records.some(r => r.dependencyChecks !== undefined);
   const rows = records.map(r => {
     const key = `${r.npm_pkg}|${r.prevVersion}|${r.updatedVersion}`;
     const external = r.analyzability === 'external';
     const predicted = r.candidates.length > 0;
     const category = external ? '' : r.lossByClientTest ? (predicted ? 'TP' : 'FN') : (predicted ? 'FP' : 'TN');
+    const dependencyCount = r.dependencyCandidates?.length ?? 0;
+    const predictedWithDependency = predicted || dependencyCount > 0;
+    const categoryWithDependency = external || !dependencyAnalyzed ? '' : r.lossByClientTest ? (predictedWithDependency ? 'TP' : 'FN') : (predictedWithDependency ? 'FP' : 'TN');
     const gc = groupCounts.get(key) ?? {};
     const cells = (g: GroupKey) => [gc[g]?.scanned ?? '', gc[g]?.detected ?? ''];
     return [r.npm_pkg, r.prevVersion, r.updatedVersion, r.state, r.status === 'evaluated' ? 'evaluated' : `${r.status}:${r.reason}`,
       external ? '' : predicted ? 'yes' : 'no', category,
-      [...new Set(r.candidates.map(c => c.tag))].sort().join(';'), r.candidates.length, patternsOf.get(key) ?? 0,
+      [...new Set(r.candidates.map(c => c.tag))].sort().join(';'), r.candidates.length, dependencyAnalyzed && !external ? dependencyCount : '', categoryWithDependency, patternsOf.get(key) ?? 0,
       ...cells('g1'), ...cells('g2'), ...cells('g3')].map(toCsvCell).join(',');
   });
 

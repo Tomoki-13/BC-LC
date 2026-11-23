@@ -97,6 +97,7 @@ export type ChangeTag =
   | 'published-file-missing' // 公開物（package.json files）から main が読むファイルが欠落＝読み込み時に Cannot find module
   | 'exports-restricted'     // package.json exports の新設・縮小で、公開されなくなったサブパス／本体の require が読めなくなる
   | 'entry-default-removed'  // 入口ファイルの default が無くなる（require('lib')() / import x from 'lib' が壊れる）
+  | 'dependency-breaking-change' // 依存パッケージの破壊的変更が，それを呼ぶライブラリの公開関数に及ぶ（依存パッケージの調査．BCLC_DEPENDENCY=0 で出さない）
   // --- 予約（今後利用する可能性があり型として記録するのみ。現状 diffSurface は emit せず、分類にも結果ラベルにも使わない）---
   | 'option-added'           // options キーの追加＝加算的・非破壊。旧クライアントは影響を受けない
   | 'arg-added'              // 追加引数が必須か任意か surface（引数名のみ）では判別できず、必須のときだけ破壊なので構造的に断定できない
@@ -112,7 +113,7 @@ export const LOSS_TAGS: ReadonlySet<ChangeTag> = new Set<ChangeTag>([
   'function-removed', 'export-removed', 'module-removed', 'deep-import-broken',
   'arg-reordered', 'arg-removed', 'sync-to-async', 'new-required', 'module-format-changed',
   'option-removed', 'export-style-changed', 'return-changed', 'node-npm-requirement-raised',
-  'published-file-missing', 'exports-restricted', 'entry-default-removed',
+  'published-file-missing', 'exports-restricted', 'entry-default-removed', 'dependency-breaking-change',
 ]);
 
 /** 静的検出の確信度 */

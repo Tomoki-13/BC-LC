@@ -39,6 +39,9 @@ export const CHANGEVER_DIR = `${OUTPUT_BASE}/changeversion_input`;              
 export const groupDirOf = (clientDetectBase: string, group: string) => `${clientDetectBase}/per_group/${group}`;
 // 検出だけの実行（make client-detect）の出力。latest は latest/BC-LC/detect_only_<パターンの出所>_detect-<粒度>/（同じ名前のフォルダだけ消して書き直す）・history に日時スナップショット
 export const DETECT_STANDALONE_HISTORY = '../../outputs/history/BC-LC-detect';
+export const DEPENDENCY_CLONE_BASE = '../../clonedata/dependency_versions'; // 依存パッケージのクローン（<パッケージ>/．make clone-dependencies が作る．分析対象の lib_versions とは分ける）
+// 依存パッケージの調査をするか（make run の DEPENDENCY=0 で飛ばす）
+export const DEPENDENCY_ENABLED = process.env.BCLC_DEPENDENCY !== '0';
 export const CLIENT_REPOS_BASE = '../../clonedata/clientRepos'; // クライアント repo クローン（<lib>/<owner>/<repo>）
 export const REGISTRY_DEPS_CACHE = '../../clonedata/registry-deps'; // npm registry の依存情報キャッシュ（<name>.json＝版→dependencies）
 
@@ -107,7 +110,7 @@ export interface LossCandidate {
   filePath?: string;  // 定義ファイル（repo 相対）
 }
 
-/** 依存 range の pre→post 変化1件（間接依存起因の破壊を測るための signal。採点には不使用） */
+/** 依存 range の pre→post 変化1件（採点には使わない） */
 export interface DepChange {
   name: string;                                    // 依存パッケージ名
   kind: 'dependencies' | 'peerDependencies';
@@ -153,7 +156,9 @@ export interface DetectionRecord extends GroundTruthPair {
   analyzability: Analyzability;
   bcLoss: BcLoss;             // 損失の判定。'loss'=損失候補あり / 'no-loss'=評価済みで候補なし / 'unevaluated'=評価不能(excluded)
   candidates: LossCandidate[];
-  depChanges?: DepChange[];   // pre→post の依存 range 変化（signal・採点/FN判定には使わない）
+  depChanges?: DepChange[];   // pre→post の依存 range 変化（採点には使わない）
+  dependencyCandidates?: LossCandidate[]; // 依存パッケージの破壊的変更が及ぶ公開関数（dependency-breaking-change）。依存パッケージを調べたときだけ（DEPENDENCY_ENABLED）
+  dependencyChecks?: unknown[];           // 依存パッケージごとの調べた結果（dependencyLoss/dependencyBreakingChange.ts の DependencyCheck）
 }
 
 /** DetectionRecord の損失有無ラベル（candidates は LOSS_TAGS のみ emit されるため「候補ありか」で決まる） */
@@ -275,7 +280,7 @@ export async function buildSurfaceForVersion(repoDir: string, version: string, g
   try {
     LibRepo.checkoutVersion(repoDir, ref);
     const surface = await ApiSurface.buildApiSurface(repoDir, version, ref);
-    return surface; // 空 surface もそのまま返す（採点側で empty=抽出限界を「予測=損失なし」として fold。null は外部失敗のみ）
+    return surface; // 空 surface もそのまま返す（採点側で empty を「予測=損失なし」として数える。null は外部失敗のみ）
   } catch {
     return null;
   }

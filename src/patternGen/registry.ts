@@ -16,6 +16,7 @@ import { convertNodeNpmRequirementRaised } from './converters/nodeNpmRequirement
 import { convertPublishedFileMissing } from './converters/publishedFileMissing';
 import { convertExportsRestricted } from './converters/exportsRestricted';
 import { convertEntryDefaultRemoved } from './converters/entryDefaultRemoved';
+import { usageCallPatterns } from './converters/shared';
 
 /**
  * ChangeTag → パターン変換器の対応表（LOSS_TAGS を全て登録）
@@ -38,4 +39,6 @@ export const CONVERTERS: Partial<Record<ChangeTag, TagConverter>> = {
   'published-file-missing': convertPublishedFileMissing,
   'exports-restricted': convertExportsRestricted,
   'entry-default-removed': convertEntryDefaultRemoved,
+  // 影響を受ける公開関数の呼び出しを当てる（return-changed と同じ形）
+  'dependency-breaking-change': usageCallPatterns,
 };

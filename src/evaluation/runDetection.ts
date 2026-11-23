@@ -10,10 +10,11 @@ import RunLogger from '../utils/runLogger';
 import { initRunLog, phase, progress, logEvent } from '../utils/runLog';
 import { extractRepositoryUrl } from '../utils/npmRegistry';
 import { diffDeps } from '../depImpact/depDiff';
+import { findDependencyBreakingChanges, extractVersionTree, type DependencyCheck } from '../dependencyLoss/dependencyBreakingChange';
 import { generatePatterns } from '../patternGen/generatePatterns';
 import {
   CLONE_BASE, GROUND_TRUTH_PATH, LIBRARY_DETECT_DIR, PATTERNS_DIR, PATTERNS_PATH, RECORDS_PATH, KEY_RESULTS_JSON, KEY_RESULTS_CSV, SURFACE_DIR, AUDIT_DIR, EXTRACTION_COVERAGE_DIR, GroundTruthPair, DetectionRecord, LossCandidate,
-  PatternRecord, toDirName, loadGroundTruth, groupByLib, fetchPackument,
+  PatternRecord, toDirName, loadGroundTruth, groupByLib, fetchPackument, DEPENDENCY_ENABLED,
   ExcludeReason, Analyzability, classifyAnalyzability,
 } from '../utils/evalShared';
 import type { DtsValidation } from '../types/LibDiff';
@@ -171,18 +172,40 @@ export async function runDetection(maxLibs: number = Infinity): Promise<void> {
 
       // diffSurface のフル候補（symbol/filePath/label を含む）を1回だけ取り，records と pattern 生成で共用
       const fullCandidates = DiffSurface.diffSurface(preSurface.surface, postSurface.surface, libName);
-      const candidates: LossCandidate[] = fullCandidates
-        .map((c: any) => ({ tag: c.tag, detail: c.detail ?? c.label ?? '', confidence: c.confidence ?? '', symbol: c.symbol, filePath: c.filePath }));
+      const toRecordCandidate = (c: any): LossCandidate => ({ tag: c.tag, detail: c.detail ?? c.label ?? '', confidence: c.confidence ?? '', symbol: c.symbol, filePath: c.filePath });
+      const candidates: LossCandidate[] = fullCandidates.map(toRecordCandidate);
+      // 依存 range 変化を別枠で記録（採点は candidates のみ・depChanges は使わない）
+      //TODO:実験用
+      const depChanges = diffDeps(packument?.versions?.[pair.prevVersion], packument?.versions?.[pair.updatedVersion]);
+
+      // 依存パッケージの破壊的変更が及ぶ公開関数（dependency-breaking-change）。candidates とは分けて持ち，採点では両方の値を出す
+      let dependencyFull: any[] = [];
+      let dependencyChecks: DependencyCheck[] | undefined;
+      const dependencyTargets = depChanges.filter(d => d.kind === 'dependencies' && (d.change === 'major-bump' || d.change === 'minor-patch-bump'));
+      if (DEPENDENCY_ENABLED && dependencyTargets.length > 0) {
+        progress({ lib: libName, libIndex, libTotal: libNames.length, version: pair.updatedVersion, step: 'dependency' });
+        let postTree: string | null = null;
+        try {
+          const getPostTree = () => (postTree ??= extractVersionTree(repoDir, postSurface.surface!.tag, `${libName}-${pair.updatedVersion}`));
+          const found = await findDependencyBreakingChanges(libName, pair.prevVersion, pair.updatedVersion, postSurface.surface, getPostTree, dependencyTargets);
+          dependencyFull = found.candidates;
+          dependencyChecks = found.checks;
+        } catch (e: any) {
+          logger.error(libName, pair.updatedVersion, 'dependency', `依存パッケージの調査に失敗: ${e?.message ?? e}`);
+        } finally {
+          if (postTree) fs.rmSync(postTree, { recursive: true, force: true });
+        }
+      }
+      const dependencyCandidates: LossCandidate[] = dependencyFull.map(toRecordCandidate);
+
       // 損失候補 → R-BC 形式の検出パターン（LOSS_TAGS の絞り込みは generatePatterns 内）
-      const { patterns, skipped } = generatePatterns(fullCandidates, preSurface.surface, postSurface.surface);
+      const { patterns, skipped } = generatePatterns([...fullCandidates, ...dependencyFull], preSurface.surface, postSurface.surface);
       patternRecords.push({ npm_pkg: pair.npm_pkg, prevVersion: pair.prevVersion, updatedVersion: pair.updatedVersion, patterns, skippedTags: skipped.map(s => s.tag) });
       // 判定に使った surface を pre/post ペアで保持（後で surface/<lib>/<prev>__<upd>.json に書く）
       surfacePairs.push({ npm_pkg: pair.npm_pkg, prevVersion: pair.prevVersion, updatedVersion: pair.updatedVersion, pre: preSurface.surface, post: postSurface.surface });
-      // 依存 range 変化を signal として別枠で記録（採点は candidates のみ・depChanges は不使用）
-      //TODO:実験用
-      const depChanges = diffDeps(packument?.versions?.[pair.prevVersion], packument?.versions?.[pair.updatedVersion]);
-      const bcLoss = candidates.length > 0 ? 'loss' : 'no-loss'; // candidates は LOSS_TAGS のみ＝候補ありがそのまま損失
-      records.push({ ...pair, status: 'evaluated', reason: 'ok', analyzability: 'analyzed', bcLoss, candidates, depChanges });
+      const bcLoss = candidates.length > 0 ? 'loss' : 'no-loss'; // candidates は LOSS_TAGS のみ＝候補ありがそのまま損失（依存パッケージ由来は含めない）
+      records.push({ ...pair, status: 'evaluated', reason: 'ok', analyzability: 'analyzed', bcLoss, candidates, depChanges,
+        ...(dependencyChecks ? { dependencyCandidates, dependencyChecks } : {}) });
     }
   }
   process.stderr.write('\n');

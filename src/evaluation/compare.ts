@@ -20,7 +20,7 @@ interface ScoredPair extends DetectionRecord {
  * 検出事実(loss_candidates_per_version_pair.json)を正解と突き合わせて category を付ける。入力: DetectionRecord / 出力: ScoredPair
  *   record.analyzability（runDetection が付けた型付きタグ）で扱いを分ける（reason 文字列は解釈しない）:
  *     external     → 混同行列の外（category=''）
- *     method-limit → 「予測=損失なし」で FN/TN に計上。コードは取れたのに export 0件＝手法の抽出限界
+ *     method-limit → 「予測=損失なし」で FN/TN に計上（コードは取れたが export が 0 件）
  *     ok           → 通常評価（candidates 有無で TP/FP/FN/TN）
  */
 function scoreRecord(record: DetectionRecord): ScoredPair {
@@ -33,7 +33,7 @@ function scoreRecord(record: DetectionRecord): ScoredPair {
     : (predictedLoss ? 'FP' : 'TN');
   const tags = [...new Set(record.candidates.map(c => c.tag))].join(';');
   const causes = record.analyzability === 'method-limit'
-    ? `method-limit:${record.reason}` // 抽出限界で空予測になった理由を残す
+    ? `method-limit:${record.reason}` // export 0 件で空予測になった理由を残す
     : record.candidates.map(c => `${c.tag}:${c.detail}`).join(' | ');
   return { ...record, predictedLoss, lossCount: record.candidates.length, tags, causes, category };
 }
@@ -41,7 +41,7 @@ function scoreRecord(record: DetectionRecord): ScoredPair {
 /** loss_candidates_per_version_pair.json を採点し，混同行列・指標・各CSVを loss_judgement_accuracy/・loss_judgement_by_tag/ に出力する（clone/surface は行わない） */
 export function runCompare(): void {
   const scored = loadRecords().map(scoreRecord);
-  // 混同行列に入る = evaluated ＋ 抽出限界(empty等)fold（category が付いたもの）／外部除外は category=''
+  // 混同行列に入る = evaluated ＋ export 0 件(empty等)（category が付いたもの）／外部除外は category=''
   const evaluatedRows = scored.filter(row => row.category !== '');
   const excludedRows = scored.filter(row => row.category === '');
 
@@ -54,6 +54,29 @@ export function runCompare(): void {
   }
   const metrics = computeMetrics(confusionMatrix);
 
+  // 依存パッケージ由来の候補（dependency-breaking-change）を足したときの判定。依存パッケージを調べていない実行では null
+  const dependencyAnalyzed = evaluatedRows.some(row => row.dependencyChecks !== undefined);
+  const categoryWithDependency = (row: ScoredPair): ScoredPair['category'] => {
+    const predicted = row.candidates.length + (row.dependencyCandidates?.length ?? 0) > 0;
+    return row.lossByClientTest ? (predicted ? 'TP' : 'FN') : (predicted ? 'FP' : 'TN');
+  };
+  const withDependencyMatrix = { tp: 0, fp: 0, fn: 0, tn: 0 };
+  const changed = { fnToTp: [] as string[], tnToFp: [] as string[] };
+  for (const row of evaluatedRows) {
+    const c = categoryWithDependency(row);
+    withDependencyMatrix[c.toLowerCase() as 'tp' | 'fp' | 'fn' | 'tn']++;
+    const key = `${row.npm_pkg} ${row.prevVersion}→${row.updatedVersion}`;
+    if (row.category === 'FN' && c === 'TP') changed.fnToTp.push(key);
+    if (row.category === 'TN' && c === 'FP') changed.tnToFp.push(key);
+  }
+  const withDependency = dependencyAnalyzed ? {
+    confusion: withDependencyMatrix,
+    metrics: computeMetrics(withDependencyMatrix),
+    fnToTp: changed.fnToTp,
+    tnToFp: changed.tnToFp,
+    versionPairsWithDependencyCandidates: evaluatedRows.filter(row => (row.dependencyCandidates?.length ?? 0) > 0).length,
+  } : null;
+
   // 除外理由を集計（reason 中のバージョン番号カッコを外して同種をまとめる）
   const excludedByReason: Record<string, number> = {};
   for (const row of excludedRows) {
@@ -65,9 +88,9 @@ export function runCompare(): void {
   const methodLimitFolded = methodLimitRows.length;
   const summary = {
     totalPairs: scored.length,
-    matrixTotal: evaluatedRows.length,                          // 混同行列の母数（= evaluated + 抽出限界fold）
+    matrixTotal: evaluatedRows.length,                          // 混同行列の件数（= evaluated + export 0 件）
     evaluatedNormal: evaluatedRows.length - methodLimitFolded,  // 両版の surface を抽出できたペア
-    methodLimitFolded,                                          // 抽出限界(empty)を予測『損失なし』として計上した数
+    methodLimitFolded,                                          // export 0 件(empty)を予測『損失なし』として計上した数
     methodLimitBreakdown: {                                     // その内訳（FN=真の見逃し扱い / TN=正解扱い）
       fn: methodLimitRows.filter(r => r.category === 'FN').length,
       tn: methodLimitRows.filter(r => r.category === 'TN').length,
@@ -78,8 +101,9 @@ export function runCompare(): void {
       failure_loss: evaluatedRows.filter(row => row.lossByClientTest).length,
       success_noLoss: evaluatedRows.filter(row => !row.lossByClientTest).length,
     },
-    confusion: confusionMatrix,
+    confusion: confusionMatrix,                                  // 依存パッケージ由来の候補を入れない値（以前の実行と比べられる値）
     metrics,
+    withDependency,                                              // 依存パッケージ由来の候補（dependency-breaking-change）を足した値
   };
 
   // 混同行列・バージョンペアごとの判定・除外は loss_judgement_accuracy/、タグ別 TP/FP は loss_judgement_by_tag/
@@ -90,9 +114,11 @@ export function runCompare(): void {
   fs.writeFileSync(path.join(outputDir, KEY_RESULTS_JSON), JSON.stringify(summary, null, 2));
 
   // 評価用 CSV（評価できたペア: test_result / 判定した損失の有無 / 原因）
-  const evaluationHeader = 'npm_pkg,prevVersion,updatedVersion,test_result,predicted_loss,category,loss_count,tags,causes\n';
+  const evaluationHeader = 'npm_pkg,prevVersion,updatedVersion,test_result,predicted_loss,category,loss_count,tags,causes,dependency_loss_count,category_with_dependency,dependency_causes\n';
   fs.writeFileSync(path.join(outputDir, 'detail_evaluated_version_pairs.csv'), evaluationHeader + evaluatedRows.map(row =>
-    [row.npm_pkg, row.prevVersion, row.updatedVersion, row.state, row.predictedLoss ? 'yes' : 'no', row.category, row.lossCount, row.tags, row.causes].map(toCsvCell).join(','),
+    [row.npm_pkg, row.prevVersion, row.updatedVersion, row.state, row.predictedLoss ? 'yes' : 'no', row.category, row.lossCount, row.tags, row.causes,
+      row.dependencyCandidates?.length ?? '', dependencyAnalyzed ? categoryWithDependency(row) : '',
+      (row.dependencyCandidates ?? []).map(c => `${c.symbol}: ${c.detail}`).join(' | ')].map(toCsvCell).join(','),
   ).join('\n'));
 
   // 除外 CSV（評価できなかったペアと理由）
@@ -108,6 +134,13 @@ export function runCompare(): void {
     for (const tag of row.tags.split(';').filter(Boolean)) {
       (tagStats[tag] ??= { tp: 0, fp: 0 })[row.category === 'TP' ? 'tp' : 'fp']++;
     }
+  }
+  // 依存パッケージ由来の候補は，それを足したときの判定（TP/FP）で数える
+  for (const row of evaluatedRows) {
+    if (!row.dependencyCandidates?.length) continue;
+    const c = categoryWithDependency(row);
+    if (c !== 'TP' && c !== 'FP') continue;
+    (tagStats['dependency-breaking-change'] ??= { tp: 0, fp: 0 })[c === 'TP' ? 'tp' : 'fp']++;
   }
   const distributionRows = Object.entries(tagStats)
     .map(([tag, s]) => ({ tag, tp: s.tp, fp: s.fp, total: s.tp + s.fp, precision: +(s.tp / (s.tp + s.fp)).toFixed(3) }))
